@@ -33,13 +33,13 @@ The team—not the judges—runs the worker against the submitted paper-account 
 
 ## Software release gates
 
-- [x] Integrated suite passes: 181 automated tests.
+- [x] Integrated suite passes: 190 automated tests.
 - [x] Five-scenario replay completes with zero external broker mutations.
 - [x] Official `alpaca-mcp-server==2.3.0` and the committed required-tool schema hash are pinned.
-- [ ] Real Featherless Qwen probe is captured with official MCP reads and a structured decision.
+- [x] Real Featherless Qwen probe completed five official MCP reads, exposed zero mutation tools, and returned structured `READY`.
 - [ ] The first competition-account MLEG attempt is observed as the controlled live canary and remains under the one-shot lifecycle.
-- [ ] Testing and competition env-pair validation proves different account IDs, keys, secrets, and database paths.
-- [ ] Competition read-only preflight verifies account suffix, status, level, equity, flat positions, open orders, clock, and MCP schema.
+- [x] Testing and competition env-pair validation proves different account IDs, Alpaca key pairs, and database paths.
+- [x] Competition read-only preflight verifies account suffix, ACTIVE status, level 3, `$100,000` equity, flat positions, zero open orders, clock, and MCP schema.
 - [ ] One date/account/environment-bound entry authorization is recorded before startup and after consumption, revocation, or expiry.
 - [ ] The armed service is the continuous worker; `worker --once` is not used while execution is enabled.
 - [ ] Droplet worker survives a restart and reconciles the same persisted state.

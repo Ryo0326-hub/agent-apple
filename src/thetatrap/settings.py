@@ -73,7 +73,7 @@ class RuntimeSettings(BaseSettings):
         default="Qwen/Qwen3-Coder-Next", validation_alias="FEATHERLESS_PRIMARY_MODEL"
     )
     featherless_fallback_model: str = Field(
-        default="Qwen/Qwen3-30B-A3B-Instruct-2507",
+        default="Qwen/Qwen3-32B",
         validation_alias="FEATHERLESS_FALLBACK_MODEL",
     )
     timezone: str = Field(default="America/New_York", validation_alias="TZ")
@@ -211,6 +211,11 @@ def validate_environment_pair(
         raise ConfigurationError("development and competition account IDs must differ")
     if dev.alpaca_api_key.get_secret_value() == competition.alpaca_api_key.get_secret_value():
         raise ConfigurationError("development and competition API keys must differ")
+    if (
+        dev.alpaca_secret_key.get_secret_value()
+        == competition.alpaca_secret_key.get_secret_value()
+    ):
+        raise ConfigurationError("development and competition secret keys must differ")
     if dev.database_path.resolve() == competition.database_path.resolve():
         raise ConfigurationError("development and competition database paths must differ")
     return dev, competition

@@ -68,7 +68,7 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 **On-slide copy before the official run:**
 
-- Integrated release: 181 automated tests passing.
+- Integrated release: 190 automated tests passing.
 - Five broker-isolated replay scenarios.
 - Pinned Alpaca MCP package and required-tool schema hash.
 - Public/private dashboard isolation and broker-isolated replay verified.

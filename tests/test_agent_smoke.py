@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from openai import APIStatusError
 
 from thetatrap.agent_smoke import (
     ReadOnlySmokeAgent,
@@ -36,9 +39,14 @@ def _response(calls: list[Any] | None, content: str | None = None) -> Any:
 class FakeCompletions:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = responses
+        self.requests: list[dict[str, Any]] = []
 
-    async def create(self, **_: Any) -> Any:
-        return self.responses.pop(0)
+    async def create(self, **request: Any) -> Any:
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 class FakeClient:
@@ -80,6 +88,12 @@ def _complete_calls() -> list[Any]:
     return result
 
 
+def _status_error(status_code: int) -> APIStatusError:
+    request = httpx.Request("POST", "https://api.featherless.ai/v1/chat/completions")
+    response = httpx.Response(status_code, request=request)
+    return APIStatusError("provider error", response=response, body={})
+
+
 @pytest.mark.asyncio
 async def test_smoke_succeeds_only_after_exact_five_read_calls(valid_env_file) -> None:
     tools = FakeSmokeTools()
@@ -103,6 +117,110 @@ async def test_smoke_succeeds_only_after_exact_five_read_calls(valid_env_file) -
 
 
 @pytest.mark.asyncio
+async def test_smoke_retries_5xx_only_before_any_tool_dispatch(valid_env_file) -> None:
+    tools = FakeSmokeTools()
+    client = FakeClient(
+        [
+            _status_error(500),
+            _response(_complete_calls()),
+            _response([], '{"readiness":"READY","reasons":[]}'),
+        ]
+    )
+
+    decision = await ReadOnlySmokeAgent(
+        load_settings(valid_env_file), tools, client=client
+    ).run()
+
+    assert decision.tool_calls == SMOKE_MAX_TOOL_CALLS
+    assert decision.turns == 2
+    assert len(client.chat.completions.requests) == 3
+    assert all(
+        request["model"] == "Qwen/Qwen3-Coder-Next"
+        for request in client.chat.completions.requests
+    )
+    assert client.chat.completions.requests[0]["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_smoke_does_not_fallback_for_auth_status(valid_env_file) -> None:
+    tools = FakeSmokeTools()
+    client = FakeClient(
+        [
+            _status_error(401),
+            _response(_complete_calls()),
+            _response([], '{"readiness":"READY","reasons":[]}'),
+        ]
+    )
+
+    with pytest.raises(AgentError, match="non-fallback HTTP 401"):
+        await ReadOnlySmokeAgent(
+            load_settings(valid_env_file), tools, client=client
+        ).run()
+
+    assert tools.calls == []
+    assert len(client.chat.completions.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_smoke_routes_unavailable_primary_to_fallback(valid_env_file) -> None:
+    tools = FakeSmokeTools()
+    client = FakeClient(
+        [
+            _status_error(404),
+            _response(_complete_calls()),
+            _response([], '{"readiness":"READY","reasons":[]}'),
+        ]
+    )
+
+    decision = await ReadOnlySmokeAgent(
+        load_settings(valid_env_file), tools, client=client
+    ).run()
+
+    assert decision.model == "Qwen/Qwen3-32B"
+    assert [
+        request["model"] for request in client.chat.completions.requests
+    ] == ["Qwen/Qwen3-Coder-Next", "Qwen/Qwen3-32B", "Qwen/Qwen3-32B"]
+    assert decision.tool_calls == SMOKE_MAX_TOOL_CALLS
+
+
+@pytest.mark.asyncio
+async def test_smoke_never_retries_provider_failure_after_a_read(valid_env_file) -> None:
+    tools = FakeSmokeTools()
+    first_call = _complete_calls()[0]
+    client = FakeClient([_response([first_call]), _status_error(503)])
+
+    with pytest.raises(AgentError, match="refusing to replay"):
+        await ReadOnlySmokeAgent(
+            load_settings(valid_env_file), tools, client=client
+        ).run()
+
+    assert len(tools.calls) == 1
+    assert len(client.chat.completions.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_smoke_global_deadline_includes_mcp_reads(
+    valid_env_file, monkeypatch
+) -> None:
+    class SlowSmokeTools(FakeSmokeTools):
+        async def execute(self, name: str, arguments: dict[str, Any]) -> Any:
+            await asyncio.sleep(0.05)
+            return await super().execute(name, arguments)
+
+    monkeypatch.setattr("thetatrap.agent_smoke.SMOKE_MAX_SECONDS", 0.01)
+    tools = SlowSmokeTools()
+
+    with pytest.raises(AgentError, match="MCP read exceeded its time budget"):
+        await ReadOnlySmokeAgent(
+            load_settings(valid_env_file),
+            tools,
+            client=FakeClient([_response([_complete_calls()[0]])]),
+        ).run()
+
+    assert len(tools.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_smoke_reports_structured_not_ready_reason(valid_env_file) -> None:
     tools = FakeSmokeTools()
     decision = await ReadOnlySmokeAgent(
@@ -121,6 +239,85 @@ async def test_smoke_reports_structured_not_ready_reason(valid_env_file) -> None
 
     assert decision.readiness == "NOT_READY"
     assert decision.reasons == ("OPEN_POSITION",)
+
+
+@pytest.mark.asyncio
+async def test_smoke_recovers_once_when_model_omits_remaining_read(
+    valid_env_file,
+) -> None:
+    tools = FakeSmokeTools()
+    calls = _complete_calls()
+    client = FakeClient(
+        [
+            _response(calls[:-1]),
+            _response([], "I am finished."),
+            _response([calls[-1]]),
+            _response([], '{"readiness":"READY","reasons":[]}'),
+        ]
+    )
+    decision = await ReadOnlySmokeAgent(
+        load_settings(valid_env_file),
+        tools,
+        client=client,
+    ).run()
+
+    assert decision.tool_calls == SMOKE_MAX_TOOL_CALLS
+    assert set(decision.read_tools) == SETUP_READ_TOOLS
+    assert decision.turns == 4
+    incomplete_requests = [
+        request for request in client.chat.completions.requests if "tools" in request
+    ]
+    assert all(request["tool_choice"] == "auto" for request in incomplete_requests)
+    assert all(
+        {
+            definition["function"]["name"]
+            for definition in request["tools"]
+        }
+        == SETUP_READ_TOOLS
+        for request in incomplete_requests
+    )
+
+
+@pytest.mark.asyncio
+async def test_smoke_fails_closed_after_second_empty_tool_response(
+    valid_env_file,
+) -> None:
+    tools = FakeSmokeTools()
+
+    with pytest.raises(AgentError, match="ended before completing required reads"):
+        await ReadOnlySmokeAgent(
+            load_settings(valid_env_file),
+            tools,
+            client=FakeClient([_response([]), _response([])]),
+        ).run()
+    assert tools.calls == []
+
+
+@pytest.mark.asyncio
+async def test_retry_and_fallback_do_not_expand_global_turn_budget(
+    valid_env_file,
+) -> None:
+    tools = FakeSmokeTools()
+    calls = _complete_calls()
+    client = FakeClient(
+        [
+            _response([]),
+            _status_error(503),
+            _status_error(503),
+            _status_error(503),
+            *[_response([call]) for call in calls],
+            _response([], '{"readiness":"READY","reasons":[]}'),
+        ]
+    )
+
+    with pytest.raises(AgentError, match="missing readiness result"):
+        await ReadOnlySmokeAgent(
+            load_settings(valid_env_file), tools, client=client
+        ).run()
+
+    assert len(tools.calls) == SMOKE_MAX_TOOL_CALLS
+    assert len(client.chat.completions.requests) == 9
+    assert len(client.chat.completions.responses) == 1
 
 
 @pytest.mark.asyncio

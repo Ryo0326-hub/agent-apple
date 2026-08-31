@@ -70,7 +70,7 @@ Choose exactly one script after the official run.
 
 **Narration:**
 
-“The integrated release has one hundred and seventy-nine passing automated tests and five broker-isolated replay scenarios covering eligibility, stale data, an AI veto, timeout recovery, and exit. The agent runs continuously on DigitalOcean using Docker Compose and persistent SQLite state.”
+“The integrated release has one hundred and ninety passing automated tests and five broker-isolated replay scenarios covering eligibility, stale data, an AI veto, timeout recovery, and exit. The agent runs continuously on DigitalOcean using Docker Compose and persistent SQLite state.”
 
 **Shot:** CI result, replay summary, container health, and repository tree.
 

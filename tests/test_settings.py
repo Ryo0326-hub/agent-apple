@@ -116,6 +116,30 @@ def test_environment_pair_accepts_separate_roles(
     assert loaded_competition.environment == "competition"
 
 
+def test_environment_pair_requires_distinct_secret_keys(
+    tmp_path: Path, valid_env_text: str
+) -> None:
+    dev = tmp_path / ".env.dev"
+    competition = tmp_path / ".env.competition"
+    dev.write_text(valid_env_text, encoding="utf-8")
+    competition.write_text(
+        valid_env_text.replace(
+            "THETATRAP_ENVIRONMENT=development", "THETATRAP_ENVIRONMENT=competition"
+        )
+        .replace("dev-account-id", "competition-account-id")
+        .replace("ALPACA_API_KEY=dev-key", "ALPACA_API_KEY=competition-key")
+        .replace("dev.sqlite3", "competition.sqlite3")
+        .replace(
+            "THETATRAP_MCP_EXPECTED_SCHEMA_HASH=",
+            "THETATRAP_MCP_EXPECTED_SCHEMA_HASH=abc123",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="secret keys must differ"):
+        validate_environment_pair(dev, competition)
+
+
 def test_account_discovery_can_validate_keys_before_uuid_is_known(
     tmp_path: Path, valid_env_text: str
 ) -> None:

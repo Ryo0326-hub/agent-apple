@@ -22,7 +22,7 @@ Repricing, cancellation, timeout reconciliation, restart recovery, and next-morn
 
 ## Evidence and result
 
-- Integrated release: 181 automated tests passing.
+- Integrated release: 190 automated tests passing.
 - Five simulation-only replay scenarios with zero external broker mutations.
 - Pinned `alpaca-mcp-server==2.3.0` and required-tool schema hash.
 - Persistent audit linking evidence, model decisions, policy, authorizations, orders, positions, and equity.

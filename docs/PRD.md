@@ -175,7 +175,7 @@ The worker processes this ranked queue one candidate at a time and reviews no mo
 ### 7.1 Model
 
 - Primary: `Qwen/Qwen3-Coder-Next` on Featherless.
-- Fallback: `Qwen/Qwen3-30B-A3B-Instruct-2507`, used once only when the primary times out, returns 5xx, or is unavailable.
+- Fallback: `Qwen/Qwen3-32B`, used only when the primary times out, returns 5xx, or is unavailable. This model was retained after a live Featherless tool-call compatibility check.
 - Temperature: `0`.
 - At startup, the application discovers the pinned MCP server's tool schemas and converts the approved subset to Featherless/OpenAI function definitions without hand-retyping them.
 - Every generated tool argument is validated against the discovered JSON schema with unknown fields rejected before any MCP dispatch.

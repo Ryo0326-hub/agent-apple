@@ -25,6 +25,9 @@ SMOKE_MAX_TURNS = 6
 SMOKE_MAX_TOOL_CALLS = 5
 SMOKE_MAX_SECONDS = 45
 SMOKE_MAX_TOOL_RESULT_CHARS = 2_000
+SMOKE_MAX_EMPTY_TOOL_RESPONSES = 1
+SMOKE_MAX_5XX_RETRIES = 2
+SMOKE_FALLBACK_HTTP_STATUSES = frozenset({400, 404, 408, 409, 429})
 
 SMOKE_SYSTEM_PROMPT = """You are ThetaTrap's read-only connectivity agent.
 
@@ -65,6 +68,15 @@ class SmokeDecision:
     trace: tuple[SmokeTraceItem, ...] = field(default_factory=tuple)
 
 
+@dataclass(slots=True)
+class _SmokeBudget:
+    deadline: float
+    tool_call_baseline: int
+    turns: int = 0
+    empty_tool_responses: int = 0
+    retries_5xx: int = 0
+
+
 class SmokeToolRuntime(Protocol):
     calls: list[Any]
 
@@ -94,19 +106,24 @@ class ReadOnlySmokeAgent:
                 base_url=settings.featherless_base_url,
                 api_key=settings.featherless_api_key.get_secret_value(),
                 timeout=20.0,
+                # Retry policy is enforced below so a provider request is never
+                # retried after an MCP read has been dispatched.
                 max_retries=0,
                 default_headers={"X-Title": "ThetaTrap read-only smoke"},
             )
 
     async def run(self) -> SmokeDecision:
         last_error: Exception | None = None
+        budget = _SmokeBudget(
+            deadline=time.monotonic() + SMOKE_MAX_SECONDS,
+            tool_call_baseline=len(self.tools.calls),
+        )
         for model in (
             self.settings.featherless_primary_model,
             self.settings.featherless_fallback_model,
         ):
-            calls_before = len(self.tools.calls)
             try:
-                return await self._run_with_model(model)
+                return await self._run_with_model(model, budget)
             except (
                 APIConnectionError,
                 APIStatusError,
@@ -114,17 +131,27 @@ class ReadOnlySmokeAgent:
                 asyncio.TimeoutError,
             ) as exc:
                 last_error = exc
-                if len(self.tools.calls) != calls_before:
+                if len(self.tools.calls) != budget.tool_call_baseline:
                     raise AgentError(
                         "provider failed after smoke reads began; refusing to replay them"
                     ) from exc
+                if isinstance(exc, APIStatusError) and not (
+                    500 <= exc.status_code < 600
+                ):
+                    if exc.status_code not in SMOKE_FALLBACK_HTTP_STATUSES:
+                        raise AgentError(
+                            "Featherless smoke request returned non-fallback "
+                            f"HTTP {exc.status_code}"
+                        ) from exc
                 continue
         raise AgentError(
             "both Featherless models failed during the read-only smoke test: "
             + (type(last_error).__name__ if last_error else "unknown")
         )
 
-    async def _run_with_model(self, model: str) -> SmokeDecision:
+    async def _run_with_model(
+        self, model: str, budget: _SmokeBudget
+    ) -> SmokeDecision:
         definitions = self.tools.definitions()
         exposed = {
             str(item.get("function", {}).get("name")) for item in definitions
@@ -144,10 +171,9 @@ class ReadOnlySmokeAgent:
         total_calls = 0
         prompt_tokens = 0
         completion_tokens = 0
-        started = time.monotonic()
 
-        for turn in range(1, SMOKE_MAX_TURNS + 1):
-            remaining = SMOKE_MAX_SECONDS - (time.monotonic() - started)
+        while budget.turns < SMOKE_MAX_TURNS:
+            remaining = budget.deadline - time.monotonic()
             if remaining <= 0:
                 raise AgentError("agent smoke exceeded its time budget")
 
@@ -160,11 +186,14 @@ class ReadOnlySmokeAgent:
             }
             if not reads_complete:
                 request["tools"] = definitions
-                request["tool_choice"] = "required"
-            response = await asyncio.wait_for(
-                self.client.chat.completions.create(**request),
-                timeout=min(20.0, remaining),
-            )
+                # Featherless currently returns 500 for Qwen tool requests that
+                # use the OpenAI `required` mode. `auto` preserves model tool
+                # calling while the host still requires all five reads exactly
+                # once before accepting the smoke result.
+                request["tool_choice"] = "auto"
+            response = await self._request_with_retry(request, budget)
+            budget.turns += 1
+            turn = budget.turns
             usage = getattr(response, "usage", None)
             prompt_tokens += int(getattr(usage, "prompt_tokens", 0) or 0)
             completion_tokens += int(getattr(usage, "completion_tokens", 0) or 0)
@@ -179,7 +208,7 @@ class ReadOnlySmokeAgent:
                 readiness, reasons = _parse_readiness(message.content)
                 return SmokeDecision(
                     model=model,
-                    turns=turn,
+                    turns=budget.turns,
                     tool_calls=total_calls,
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
@@ -190,7 +219,22 @@ class ReadOnlySmokeAgent:
                 )
 
             if not calls:
-                raise AgentError("agent smoke ended before completing required reads")
+                budget.empty_tool_responses += 1
+                if budget.empty_tool_responses > SMOKE_MAX_EMPTY_TOOL_RESPONSES:
+                    raise AgentError("agent smoke ended before completing required reads")
+                missing = ", ".join(sorted(SETUP_READ_TOOLS - evidence))
+                if isinstance(message.content, str) and message.content.strip():
+                    messages.append({"role": "assistant", "content": message.content})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Required reads are incomplete. Call at least one of these "
+                            f"missing tools now: {missing}. Do not return readiness JSON yet."
+                        ),
+                    }
+                )
+                continue
             if total_calls + len(calls) > SMOKE_MAX_TOOL_CALLS:
                 raise AgentError("agent smoke exceeded its five-call budget")
             total_calls += len(calls)
@@ -203,7 +247,18 @@ class ReadOnlySmokeAgent:
                 if name in evidence:
                     raise PolicyError(f"agent smoke repeated a read tool: {name}")
                 arguments = _parse_arguments(call.function.arguments)
-                result = await self.tools.execute(name, arguments)
+                remaining = budget.deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AgentError("agent smoke exceeded its time budget")
+                try:
+                    result = await asyncio.wait_for(
+                        self.tools.execute(name, arguments),
+                        timeout=remaining,
+                    )
+                except asyncio.TimeoutError as exc:
+                    raise AgentError(
+                        "agent smoke MCP read exceeded its time budget"
+                    ) from exc
                 evidence.add(name)
                 trace.append(
                     SmokeTraceItem(
@@ -225,6 +280,31 @@ class ReadOnlySmokeAgent:
         missing = sorted(SETUP_READ_TOOLS - evidence)
         detail = "missing reads: " + ", ".join(missing) if missing else "missing readiness result"
         raise AgentError("agent smoke exhausted its turn budget; " + detail)
+
+    async def _request_with_retry(
+        self, request: dict[str, Any], budget: _SmokeBudget
+    ) -> Any:
+        while True:
+            remaining = budget.deadline - time.monotonic()
+            if remaining <= 0:
+                raise AgentError("agent smoke exceeded its time budget")
+            try:
+                return await asyncio.wait_for(
+                    self.client.chat.completions.create(**request),
+                    timeout=min(20.0, remaining),
+                )
+            except APIStatusError as exc:
+                retryable_5xx = 500 <= exc.status_code < 600
+                no_reads_dispatched = (
+                    len(self.tools.calls) == budget.tool_call_baseline
+                )
+                if (
+                    not retryable_5xx
+                    or not no_reads_dispatched
+                    or budget.retries_5xx >= SMOKE_MAX_5XX_RETRIES
+                ):
+                    raise
+                budget.retries_5xx += 1
 
 
 def _parse_arguments(raw: str) -> dict[str, Any]:

@@ -24,7 +24,7 @@ def valid_env_text(tmp_path: Path) -> str:
             "FEATHERLESS_API_KEY=",
             "FEATHERLESS_BASE_URL=https://api.featherless.ai/v1",
             "FEATHERLESS_PRIMARY_MODEL=Qwen/Qwen3-Coder-Next",
-            "FEATHERLESS_FALLBACK_MODEL=Qwen/Qwen3-30B-A3B-Instruct-2507",
+            "FEATHERLESS_FALLBACK_MODEL=Qwen/Qwen3-32B",
             "TZ=America/New_York",
             "",
         ]

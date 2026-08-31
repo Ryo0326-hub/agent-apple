@@ -23,9 +23,9 @@ ThetaTrap is a hackathon engineering prototype. It uses Alpaca Basic indicative 
 | Broker exposure | 1 initial broker entry attempt per strategy date; at most 1 filled position |
 | Structure | 1-contract, four-leg iron condor |
 | Maximum loss | Lower of `$500` or `0.5%` of observed equity |
-| AI | `Qwen/Qwen3-Coder-Next`, with `Qwen/Qwen3-30B-A3B-Instruct-2507` fallback |
+| AI | `Qwen/Qwen3-Coder-Next`, with `Qwen/Qwen3-32B` fallback |
 | Alpaca boundary | Official `alpaca-mcp-server==2.3.0` only |
-| Verification baseline | 181 automated tests passing |
+| Verification baseline | 190 automated tests passing |
 | Competition result | **PRE-SUBMISSION:** official fills, final equity, and realized P&L not yet recorded |
 
 **PRE-SUBMISSION LINKS:** add the public read-only dashboard, demo video, final report, and LabLab project page after they are available.
@@ -98,7 +98,7 @@ The first-party announcements and exclusion evidence are recorded in [docs/EVENT
 
 ## Evidence and current status
 
-The integrated release passes **181 automated tests**. The five-scenario replay makes zero external broker mutations. The testing account remains stopped/disarmed and is used only for local fixtures and replay. The first competition-account live order is itself the controlled canary after all read-only release gates pass.
+The integrated release passes **190 automated tests**. A credentialed competition-account smoke run completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. The five-scenario replay makes zero external broker mutations. The testing account remains stopped/disarmed and is used only for local fixtures and replay. The first competition-account live order is itself the controlled canary after all read-only release gates pass.
 
 Do not read a zero-trade replay or an unchanged account as profitability evidence. Final claims must come from the submitted competition account's timestamped equity and order history. See the sanitized [replay summary](evidence/replay-summary.md) and [release validation summary](evidence/validation-summary.md). Credentials, SQLite databases, and raw worker logs do not belong in public evidence.
 
