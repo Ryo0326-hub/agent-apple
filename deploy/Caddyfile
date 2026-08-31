@@ -1,0 +1,14 @@
+{$THETATRAP_PUBLIC_HOST} {
+	encode zstd gzip
+
+	header {
+		Permissions-Policy "camera=(), geolocation=(), microphone=()"
+		Referrer-Policy "no-referrer"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	reverse_proxy public-ui:8501
+}

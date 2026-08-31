@@ -1,0 +1,31 @@
+{
+  "distribution": "alpaca-mcp-server",
+  "distribution_version": "2.3.0",
+  "fastmcp_version": "3.4.7",
+  "mcp_version": "1.29.1",
+  "transport": "stdio",
+  "tool_count": 54,
+  "full_schema_hash": "84e057e37f9f7591e4bd198982c0d58055fb3a83475b5d9c106936aedcce8ea6",
+  "required_schema_hash": "0d08e617a03b38fe236951ab7bafa6ae07195c1c3efca1db5fae61bdecc7db72",
+  "required_tool_names": [
+    "cancel_order_by_id",
+    "get_account_activities",
+    "get_account_config",
+    "get_account_info",
+    "get_all_positions",
+    "get_clock",
+    "get_news",
+    "get_option_chain",
+    "get_option_contracts",
+    "get_option_latest_quote",
+    "get_option_snapshot",
+    "get_open_position",
+    "get_calendar",
+    "get_order_by_client_id",
+    "get_order_by_id",
+    "get_orders",
+    "get_stock_latest_quote",
+    "place_option_order",
+    "replace_order_by_id"
+  ]
+}

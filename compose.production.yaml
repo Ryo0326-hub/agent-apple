@@ -1,0 +1,129 @@
+services:
+  worker:
+    build:
+      context: .
+      args:
+        THETATRAP_BUILD_SHA: ${THETATRAP_BUILD_SHA:?set to the deployed Git commit}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+
+  ui:
+    build:
+      context: .
+      args:
+        THETATRAP_BUILD_SHA: ${THETATRAP_BUILD_SHA:?set to the deployed Git commit}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - private
+
+  public-ui:
+    build:
+      context: .
+      args:
+        THETATRAP_BUILD_SHA: ${THETATRAP_BUILD_SHA:?set to the deployed Git commit}
+    init: true
+    restart: unless-stopped
+    command:
+      - streamlit
+      - run
+      - src/thetatrap/public_dashboard.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --server.enableCORS=true
+      - --server.enableXsrfProtection=true
+      - --browser.gatherUsageStats=false
+    environment:
+      THETATRAP_DATABASE_PATH: /data/thetatrap.sqlite3
+      THETATRAP_ENVIRONMENT: ${THETATRAP_ENVIRONMENT:?required}
+      THETATRAP_READ_ONLY: ${THETATRAP_READ_ONLY:-true}
+      THETATRAP_EXECUTION_ENABLED: ${THETATRAP_EXECUTION_ENABLED:-false}
+      TZ: America/New_York
+    volumes:
+      - thetatrap-data:/data:ro
+    expose:
+      - "8501"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 30s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    restart: unless-stopped
+    environment:
+      THETATRAP_PUBLIC_HOST: ${THETATRAP_PUBLIC_HOST:?set the public DNS hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      public-ui:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:2019/config/
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - edge
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  private:
+  edge:
+
+volumes:
+  caddy-data:
+  caddy-config:

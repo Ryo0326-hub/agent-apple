@@ -1,0 +1,16 @@
+{
+  "simulation_label": "SIMULATION_ONLY_NO_BROKER_OR_MCP",
+  "scenario_names": [
+    "eligible_candidate",
+    "deterministic_rejection",
+    "model_veto",
+    "ambiguous_timeout_reconciliation",
+    "opposite_side_exit_to_flat"
+  ],
+  "expected_rejection_code": "UNDERLYING_QUOTE_STALE",
+  "expected_veto_code": "TRADING_HALT",
+  "expected_entry_credit": "2.45",
+  "expected_maximum_loss": "255.00",
+  "expected_exit_position_state": "FLAT",
+  "expected_external_broker_mutation_calls": 0
+}

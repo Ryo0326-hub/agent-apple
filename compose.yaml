@@ -1,0 +1,64 @@
+services:
+  worker:
+    build: .
+    init: true
+    restart: unless-stopped
+    command: ["python", "-m", "thetatrap.cli", "worker"]
+    environment:
+      THETATRAP_ENVIRONMENT: ${THETATRAP_ENVIRONMENT:?required}
+      THETATRAP_EXPECTED_ACCOUNT_ID: ${THETATRAP_EXPECTED_ACCOUNT_ID:?required}
+      THETATRAP_DATABASE_PATH: /data/thetatrap.sqlite3
+      THETATRAP_READ_ONLY: ${THETATRAP_READ_ONLY:-true}
+      THETATRAP_EXECUTION_ENABLED: ${THETATRAP_EXECUTION_ENABLED:-false}
+      THETATRAP_MCP_EXPECTED_SCHEMA_HASH: ${THETATRAP_MCP_EXPECTED_SCHEMA_HASH:-}
+      THETATRAP_LOG_LEVEL: ${THETATRAP_LOG_LEVEL:-INFO}
+      THETATRAP_WORKER_INTERVAL_SECONDS: ${THETATRAP_WORKER_INTERVAL_SECONDS:-60}
+      ALPACA_API_KEY: ${ALPACA_API_KEY:?required}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:?required}
+      ALPACA_PAPER_TRADE: ${ALPACA_PAPER_TRADE:-true}
+      ALPACA_TOOLSETS: ${ALPACA_TOOLSETS:?required}
+      FEATHERLESS_API_KEY: ${FEATHERLESS_API_KEY:-}
+      FEATHERLESS_BASE_URL: ${FEATHERLESS_BASE_URL:-https://api.featherless.ai/v1}
+      FEATHERLESS_PRIMARY_MODEL: ${FEATHERLESS_PRIMARY_MODEL:-Qwen/Qwen3-Coder-Next}
+      FEATHERLESS_FALLBACK_MODEL: ${FEATHERLESS_FALLBACK_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
+      TZ: America/New_York
+    volumes:
+      - thetatrap-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-m", "thetatrap.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  ui:
+    build: .
+    init: true
+    restart: unless-stopped
+    command: ["streamlit", "run", "src/thetatrap/dashboard.py", "--server.address=0.0.0.0", "--server.port=8501"]
+    environment:
+      THETATRAP_DATABASE_PATH: /data/thetatrap.sqlite3
+      THETATRAP_ENVIRONMENT: ${THETATRAP_ENVIRONMENT:?required}
+      THETATRAP_READ_ONLY: ${THETATRAP_READ_ONLY:-true}
+      THETATRAP_EXECUTION_ENABLED: ${THETATRAP_EXECUTION_ENABLED:-false}
+      TZ: America/New_York
+    volumes:
+      - thetatrap-data:/data
+    ports:
+      - "127.0.0.1:8501:8501"
+    depends_on:
+      worker:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  thetatrap-data:

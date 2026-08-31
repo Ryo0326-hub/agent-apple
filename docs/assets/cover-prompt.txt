@@ -1,0 +1,12 @@
+Use case: ads-marketing
+Asset type: 1.91:1 hackathon project social cover
+Primary request: an original premium visual for an autonomous AI options-trading agent called ThetaTrap
+Scene/backdrop: deep midnight navy-to-black gradient with a subtle financial market grid fading into the distance
+Subject: one elegant four-sided luminous risk boundary enclosing a restrained flowing volatility curve, with a small central agent node connected by thin data paths; convey bounded intelligence, options structure, and safety
+Style/medium: refined cinematic 3D data visualization, modern fintech, understated and credible rather than flashy
+Composition/framing: ultra-wide landscape, strongest visual cluster on the right half, generous dark negative space on the left for exact typography
+Lighting/mood: precise cyan and restrained amber highlights, confident, technical, calm
+Text: THETATRAP / Bounded MCP-Native AI Options Agent / PAPER TRADING - ALPACA MCP - QWEN
+Constraints: no company logos, trademarks, candlestick clichés, dollar signs, people, coins, robots, or watermark
+
+Generation method: built-in image generation, followed by a built-in edit to add exact title typography. The final image was mechanically resized to 1200x630.

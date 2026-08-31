@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "thetatrap"
+version = "0.2.0"
+description = "MCP-native autonomous Alpaca paper options agent"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "alpaca-mcp-server==2.3.0",
+  "fastmcp==3.4.7",
+  "httpx==0.28.1",
+  "jsonschema==4.26.0",
+  "mcp==1.29.1",
+  "openai==2.54.0",
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
+  "python-dotenv==1.2.3",
+  "PyYAML==6.0.3",
+  "streamlit==1.62.0",
+]
+
+[project.scripts]
+thetatrap = "thetatrap.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/thetatrap"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+  "live_mcp: requires explicit Alpaca paper credentials and makes read-only MCP calls",
+]
