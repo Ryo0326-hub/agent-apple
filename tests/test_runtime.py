@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from thetatrap import runtime as runtime_module
 from thetatrap.execution import BrokerSnapshot
 from thetatrap.runtime import ThetaTrapRuntime
 from thetatrap.schedule import ScheduleAction
@@ -134,6 +136,68 @@ def _store(tmp_path: Path) -> Store:
     store = Store(tmp_path / "runtime.sqlite3")
     store.initialize()
     return store
+
+
+@pytest.mark.asyncio
+async def test_entry_scan_uses_each_live_collection_timestamp_for_freshness(
+    tmp_path: Path,
+    valid_env_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cycle_started_at = datetime(2026, 8, 31, 18, 50, tzinfo=UTC)
+    collection_finished_at = datetime(2026, 8, 31, 18, 50, 20, tzinfo=UTC)
+    settings = load_settings(valid_env_file)
+    store = _store(tmp_path)
+    connection = RuntimeConnection(now=cycle_started_at)
+    runtime = ThetaTrapRuntime(settings, store, connection)  # type: ignore[arg-type]
+    event = runtime.events.events[0]
+    collection_arguments: dict[str, Any] = {}
+    evaluation_arguments: dict[str, Any] = {}
+
+    async def fake_collect(*_: Any, **kwargs: Any) -> Any:
+        collection_arguments.update(kwargs)
+        return SimpleNamespace(
+            symbol=event.symbol,
+            collection_id="live-collection",
+            collected_at=collection_finished_at,
+            source_digest="live-digest",
+            previous_trading_day=date(2026, 8, 28),
+            underlying=object(),
+            front_chain=(),
+            back_chain=(),
+        )
+
+    def fake_evaluate(**kwargs: Any) -> Any:
+        evaluation_arguments.update(kwargs)
+        return SimpleNamespace(candidate=None)
+
+    monkeypatch.setattr(runtime_module, "collect_symbol_market", fake_collect)
+    monkeypatch.setattr(runtime_module, "evaluate_symbol", fake_evaluate)
+    monkeypatch.setattr(runtime, "_persist_collection", lambda *_: None)
+    monkeypatch.setattr(runtime, "_persist_evaluation", lambda *_args, **_kwargs: "id")
+    snapshot = BrokerSnapshot(
+        observed_at=cycle_started_at,
+        account={"id": "dev-account-id"},
+        account_config={},
+        clock={"is_open": True},
+        open_orders=(),
+        positions=(),
+        equity=Decimal("100000"),
+        buying_power=Decimal("200000"),
+        options_level=3,
+        market_is_open=True,
+    )
+
+    result = await runtime._scan_entry(
+        snapshot,
+        cycle_started_at,
+        events_override=(event,),
+        strategy_date_override=event.event_date,
+    )
+
+    assert result["eligible_candidates"] == 0
+    assert "now" not in collection_arguments
+    assert evaluation_arguments["observed_at"] == collection_finished_at
 
 
 @pytest.mark.asyncio

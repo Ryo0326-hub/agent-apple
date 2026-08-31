@@ -124,6 +124,12 @@ async def test_collection_uses_exact_basic_feeds_and_joins_metadata() -> None:
         name == "get_stock_latest_quote" and args["feed"] == "iex"
         for name, args in connection.calls
     )
+    call_names = [name for name, _ in connection.calls]
+    assert call_names.index("get_stock_latest_quote") > max(
+        index
+        for index, name in enumerate(call_names)
+        if name in {"get_option_chain", "get_calendar"}
+    )
     option_calls = [args for name, args in connection.calls if name == "get_option_chain"]
     assert option_calls and all(args["feed"] == "indicative" for args in option_calls)
     contract_calls = [

@@ -29,7 +29,9 @@ class FakeAuthorizationStore:
         self.arm_arguments: dict[str, Any] | None = None
         self.revoke_arguments: dict[str, Any] | None = None
 
-    def arm_entry_authorization(self, authorization_id: str, **kwargs: Any) -> dict[str, Any]:
+    def arm_entry_authorization(
+        self, authorization_id: str, **kwargs: Any
+    ) -> dict[str, Any]:
         self.arm_arguments = {"authorization_id": authorization_id, **kwargs}
         self.row = {
             "authorization_id": authorization_id,
@@ -184,8 +186,11 @@ def test_armed_worker_once_is_rejected_before_worker_start(
 ) -> None:
     armed = tmp_path / ".env.dev"
     armed.write_text(
-        valid_env_text.replace("THETATRAP_READ_ONLY=true", "THETATRAP_READ_ONLY=false")
-        .replace("THETATRAP_EXECUTION_ENABLED=false", "THETATRAP_EXECUTION_ENABLED=true"),
+        valid_env_text.replace(
+            "THETATRAP_READ_ONLY=true", "THETATRAP_READ_ONLY=false"
+        ).replace(
+            "THETATRAP_EXECUTION_ENABLED=false", "THETATRAP_EXECUTION_ENABLED=true"
+        ),
         encoding="utf-8",
     )
 
@@ -215,7 +220,9 @@ def test_preflight_authorization_reports_effective_expiry_without_account_id() -
     assert "account_id" not in result
 
 
-def test_entry_authorization_cli_integrates_with_bound_store(valid_env_file: Path) -> None:
+def test_entry_authorization_cli_integrates_with_bound_store(
+    valid_env_file: Path,
+) -> None:
     settings = load_settings(valid_env_file)
     store = Store(settings.database_path)
     store.initialize()
@@ -247,9 +254,10 @@ def test_entry_authorization_cli_integrates_with_bound_store(valid_env_file: Pat
     )
 
     assert armed["entry_authorization"]["state"] == "ARMED"
-    assert status["entry_authorization"]["authorization_id"] == armed[
-        "entry_authorization"
-    ]["authorization_id"]
+    assert (
+        status["entry_authorization"]["authorization_id"]
+        == armed["entry_authorization"]["authorization_id"]
+    )
     assert "account_id" not in status["entry_authorization"]
 
 
@@ -264,8 +272,7 @@ def test_discover_account_cli_prints_operator_assignment_without_binding(
             "account_id": "24dd7553-1360-4d58-aee7-deadbeef9876",
             "account_suffix": "…ef9876",
             "env_assignment": (
-                "THETATRAP_EXPECTED_ACCOUNT_ID="
-                "24dd7553-1360-4d58-aee7-deadbeef9876"
+                "THETATRAP_EXPECTED_ACCOUNT_ID=24dd7553-1360-4d58-aee7-deadbeef9876"
             ),
         }
 
@@ -306,3 +313,37 @@ def test_agent_smoke_cli_reports_read_only_model_evidence(
         "status": "ok",
         "tool_calls": 5,
     }
+
+
+def test_decision_rehearsal_cli_parses_strategy_date_and_reports_safety(
+    monkeypatch: pytest.MonkeyPatch,
+    valid_env_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fake_rehearsal(settings: Any, strategy_date: date) -> dict[str, Any]:
+        assert settings.execution_enabled is False
+        assert strategy_date == date(2026, 9, 1)
+        return {
+            "outcome": "QWEN_DECISION_RECORDED",
+            "safety_status": "PASS",
+            "mode": "EPHEMERAL_LIVE_READ_REHEARSAL",
+            "broker_safety": {"mutation_dispatch_attempts": 0},
+        }
+
+    monkeypatch.setattr(cli, "run_decision_rehearsal", fake_rehearsal)
+    result = cli.main(
+        [
+            "--env-file",
+            str(valid_env_file),
+            "decision-rehearsal",
+            "--strategy-date",
+            "2026-09-01",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert payload["outcome"] == "QWEN_DECISION_RECORDED"
+    assert payload["safety_status"] == "PASS"
+    assert payload["broker_safety"]["mutation_dispatch_attempts"] == 0

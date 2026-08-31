@@ -50,9 +50,6 @@ async def collect_symbol_market(
     if not normalized_symbol:
         raise ValueError("market collection requires a symbol")
 
-    stock_wrapper = await connection.call_system_read(
-        "get_stock_latest_quote", {"symbols": normalized_symbol, "feed": "iex"}
-    )
     contract_payloads = await _fetch_contracts(
         connection,
         normalized_symbol,
@@ -65,8 +62,16 @@ async def collect_symbol_market(
     back_snapshots = await _fetch_chain(
         connection, normalized_symbol, term_expiration
     )
+    calendar_reference = (now or datetime.now(UTC)).astimezone(UTC)
+    previous_day = await previous_trading_day(
+        connection, calendar_reference.date()
+    )
+    # Fetch the short-lived underlying quote last.  Strategy policy allows only
+    # ten seconds of age, while the option snapshots have a sixty-second bound.
+    stock_wrapper = await connection.call_system_read(
+        "get_stock_latest_quote", {"symbols": normalized_symbol, "feed": "iex"}
+    )
     observed_at = (now or datetime.now(UTC)).astimezone(UTC)
-    previous_day = await previous_trading_day(connection, observed_at.date())
 
     underlying_payload = _symbol_mapping(
         unwrap_data(stock_wrapper), "quotes", normalized_symbol

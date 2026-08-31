@@ -19,6 +19,7 @@ from thetatrap.log import configure_logging
 from thetatrap.mcp.client import open_alpaca_mcp
 from thetatrap.execution import ExecutionService
 from thetatrap.replay import run_replay_suite
+from thetatrap.rehearsal import run_decision_rehearsal
 from thetatrap.report import generate_report
 from thetatrap.schedule import verified_events_for_day
 from thetatrap.settings import (
@@ -47,7 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("check-config", help="validate configuration without network calls")
+    subparsers.add_parser(
+        "check-config", help="validate configuration without network calls"
+    )
     subparsers.add_parser("init-db", help="initialize SQLite and load frozen events")
 
     capture = subparsers.add_parser(
@@ -63,11 +66,19 @@ def build_parser() -> argparse.ArgumentParser:
         "agent-smoke",
         help="require the hosted model to call the five read-only MCP tools",
     )
+    rehearsal = subparsers.add_parser(
+        "decision-rehearsal",
+        help="run live deterministic screening and bounded Qwen review without mutation",
+    )
+    rehearsal.add_argument("--strategy-date", required=True)
     subparsers.add_parser("mcp-smoke", help="run one credentialed read-only MCP cycle")
     subparsers.add_parser(
-        "preflight", help="read broker state and report entry-admission gates without mutation"
+        "preflight",
+        help="read broker state and report entry-admission gates without mutation",
     )
-    worker = subparsers.add_parser("worker", help="run the autonomous paper-options worker")
+    worker = subparsers.add_parser(
+        "worker", help="run the autonomous paper-options worker"
+    )
     worker.add_argument("--once", action="store_true")
 
     replay = subparsers.add_parser(
@@ -75,10 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument("--output-db")
 
-    report = subparsers.add_parser("report", help="export a credential-free JSON/Markdown report")
+    report = subparsers.add_parser(
+        "report", help="export a credential-free JSON/Markdown report"
+    )
     report.add_argument("--output", required=True)
 
-    kill = subparsers.add_parser("kill-switch", help="inspect or change the durable kill switch")
+    kill = subparsers.add_parser(
+        "kill-switch", help="inspect or change the durable kill switch"
+    )
     kill.add_argument("action", choices=("status", "on", "off"))
     kill.add_argument("--reason")
     kill.add_argument("--confirm")
@@ -109,7 +124,9 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "status": "ok",
                     "development_account": account_suffix(dev.expected_account_id),
-                    "competition_account": account_suffix(competition.expected_account_id),
+                    "competition_account": account_suffix(
+                        competition.expected_account_id
+                    ),
                     "databases_are_separate": True,
                     "credentials_are_separate": True,
                 }
@@ -133,7 +150,9 @@ def main(argv: list[str] | None = None) -> int:
             snapshot = asyncio.run(_capture_schema(settings))
             output = Path(args.output)
             output.parent.mkdir(parents=True, exist_ok=True)
-            output.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            output.write_text(
+                json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
             _print_json(
                 {
                     "status": "ok",
@@ -151,6 +170,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "agent-smoke":
             report = asyncio.run(run_agent_smoke(settings))
+            _print_json({"status": "ok", **report})
+            return 0
+
+        if args.command == "decision-rehearsal":
+            strategy_day = _optional_strategy_date(args.strategy_date)
+            assert strategy_day is not None
+            report = asyncio.run(run_decision_rehearsal(settings, strategy_day))
             _print_json({"status": "ok", **report})
             return 0
 
@@ -207,7 +233,9 @@ def main(argv: list[str] | None = None) -> int:
             if not args.reason or not args.reason.strip():
                 raise ValueError("--reason is required when changing the kill switch")
             if args.action == "on":
-                active = store.find_active_strategy_run(environment=settings.environment)
+                active = store.find_active_strategy_run(
+                    environment=settings.environment
+                )
                 result = store.activate_kill_switch(
                     args.reason.strip(),
                     "cli_operator",
@@ -230,7 +258,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         raise AssertionError(f"unhandled command: {args.command}")
     except (ThetaTrapError, ValueError) as exc:
-        _print_json({"status": "error", "error": type(exc).__name__, "message": str(exc)})
+        _print_json(
+            {"status": "error", "error": type(exc).__name__, "message": str(exc)}
+        )
         return 2
     except Exception as exc:
         expected = _find_expected_error(exc)
@@ -259,9 +289,11 @@ async def _preflight(settings: Any) -> dict[str, Any]:
     async with open_alpaca_mcp(settings, store) as connection:
         service = ExecutionService(settings, store, connection)
         snapshot = await service.read_broker_snapshot()
-        current_strategy_date = snapshot.observed_at.astimezone(
-            ZoneInfo(settings.timezone)
-        ).date().isoformat()
+        current_strategy_date = (
+            snapshot.observed_at.astimezone(ZoneInfo(settings.timezone))
+            .date()
+            .isoformat()
+        )
         admission = service.entry_admission(
             snapshot, strategy_date=current_strategy_date
         )
@@ -336,14 +368,20 @@ def _handle_entry_authorization(
 
     reason = str(args.reason or "").strip()
     if not reason:
-        raise ValueError("--reason is required when arming or revoking entry authorization")
+        raise ValueError(
+            "--reason is required when arming or revoking entry authorization"
+        )
 
     if args.action == "arm":
         if strategy_day is None:
-            raise ValueError("--strategy-date is required when arming entry authorization")
+            raise ValueError(
+                "--strategy-date is required when arming entry authorization"
+            )
         events = load_events()
         if not verified_events_for_day(events, strategy_day):
-            raise ValueError("strategy date has no verified event in the frozen configuration")
+            raise ValueError(
+                "strategy date has no verified event in the frozen configuration"
+            )
         expires_at = datetime.combine(
             strategy_day,
             events.entry_window.stop_new_orders,
@@ -351,9 +389,13 @@ def _handle_entry_authorization(
         )
         if expires_at.astimezone(UTC) <= current:
             raise ValueError("entry authorization expiry is not in the future")
-        expected_confirmation = _entry_authorization_confirmation(settings, strategy_day)
+        expected_confirmation = _entry_authorization_confirmation(
+            settings, strategy_day
+        )
         if args.confirm != expected_confirmation:
-            raise ValueError(f'use --confirm "{expected_confirmation}" to arm one paper entry')
+            raise ValueError(
+                f'use --confirm "{expected_confirmation}" to arm one paper entry'
+            )
         authorization = store.arm_entry_authorization(
             _entry_authorization_id(
                 environment=settings.environment,
@@ -422,8 +464,13 @@ def _bound_authorization_store(settings: Any) -> Store:
         raise ValueError(
             "database must already be initialized and broker-bound before entry authorization"
         ) from exc
-    if environment != settings.environment or account_id != settings.expected_account_id:
-        raise ValueError("database identity does not match the configured role and account")
+    if (
+        environment != settings.environment
+        or account_id != settings.expected_account_id
+    ):
+        raise ValueError(
+            "database identity does not match the configured role and account"
+        )
     return store
 
 

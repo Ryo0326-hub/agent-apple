@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from typing import Any, Callable
 
-from thetatrap.agent import AgentContext, AgentDecision, AgentOutcome, QwenAgent
+from thetatrap.agent import AgentContext, AgentOutcome, QwenAgent
 from thetatrap.agent_tools import RuntimeAgentTools
+from thetatrap.errors import PolicyError
 from thetatrap.events import EventConfig, EventDefinition, load_events
 from thetatrap.execution import (
     BrokerSnapshot,
@@ -31,7 +30,12 @@ from thetatrap.orders import (
     serialize_for_storage,
 )
 from thetatrap.policy import payload_hash
-from thetatrap.schedule import ScheduleAction, action_for_time, to_market_time, verified_events_for_day
+from thetatrap.schedule import (
+    ScheduleAction,
+    action_for_time,
+    to_market_time,
+    verified_events_for_day,
+)
 from thetatrap.settings import RuntimeSettings, account_suffix
 from thetatrap.storage import Store
 from thetatrap.strategy import StrategyConfig, evaluate_symbol, rank_candidates
@@ -280,7 +284,8 @@ class ThetaTrapRuntime:
         elif (
             not snapshot.positions
             and not snapshot.open_orders
-            and state in {"POSITION_OPEN", "EXIT_SUBMITTING", "EXIT_PENDING", "RISK_OFF"}
+            and state
+            in {"POSITION_OPEN", "EXIT_SUBMITTING", "EXIT_PENDING", "RISK_OFF"}
         ):
             run = self.store.transition_strategy_run(
                 run_id, "FLAT", "BROKER_FLAT_RECONCILED", {}
@@ -357,7 +362,11 @@ class ThetaTrapRuntime:
             return {"status": "monitoring_exit", "state": state}
         if state == "SCREENING" and action is ScheduleAction.ENTRY_SCAN:
             return await self._scan_entry(snapshot, now, existing_run=run)
-        if state == "SCREENING" and to_market_time(now).time() >= self.events.entry_window.cancel_all_unfilled:
+        if (
+            state == "SCREENING"
+            and to_market_time(now).time()
+            >= self.events.entry_window.cancel_all_unfilled
+        ):
             self.store.transition_strategy_run(
                 run["run_id"], "NO_TRADE", "ENTRY_WINDOW_EXPIRED", {}
             )
@@ -455,8 +464,12 @@ class ThetaTrapRuntime:
         if observed != expected:
             return False, {
                 "reason": "SIGNED_POSITION_MISMATCH",
-                "expected": {symbol: str(qty) for symbol, qty in sorted(expected.items())},
-                "observed": {symbol: str(qty) for symbol, qty in sorted(observed.items())},
+                "expected": {
+                    symbol: str(qty) for symbol, qty in sorted(expected.items())
+                },
+                "observed": {
+                    symbol: str(qty) for symbol, qty in sorted(observed.items())
+                },
             }
         return True, {
             "expected_leg_count": 4,
@@ -470,12 +483,16 @@ class ThetaTrapRuntime:
         now: datetime,
         *,
         existing_run: dict[str, Any] | None = None,
+        events_override: tuple[EventDefinition, ...] | None = None,
+        strategy_date_override: date | None = None,
     ) -> dict[str, Any]:
         market_day = to_market_time(now).date()
-        events = verified_events_for_day(self.events, market_day)
+        events = events_override or verified_events_for_day(self.events, market_day)
         if not events:
             return {"status": "idle", "reason": "NO_VERIFIED_EVENTS"}
-        run = existing_run or self._create_run(market_day, events)
+        run = existing_run or self._create_run(
+            strategy_date_override or market_day, events
+        )
         if run["state"] == "DISCOVERING":
             run = self.store.transition_strategy_run(
                 run["run_id"], "SCREENING", "ENTRY_WINDOW_OPEN", {}
@@ -491,12 +508,11 @@ class ThetaTrapRuntime:
                     symbol=event.symbol,
                     trade_expiration=self.events.trade_expiration,
                     term_expiration=self.events.term_expiration,
-                    now=now,
                 )
                 self._persist_collection(run["run_id"], collection)
                 evaluation = evaluate_symbol(
                     symbol=event.symbol,
-                    observed_at=now,
+                    observed_at=collection.collected_at,
                     underlying=collection.underlying,
                     front_chain=collection.front_chain,
                     back_chain=collection.back_chain,
@@ -531,9 +547,7 @@ class ThetaTrapRuntime:
         by_symbol = {item[0].symbol: (item[1], item[2]) for item in eligible}
         for rank, candidate in enumerate(ranked, start=1):
             collection, _ = by_symbol[candidate.symbol]
-            self._persist_candidate(
-                run["run_id"], collection, candidate, rank=rank
-            )
+            self._persist_candidate(run["run_id"], collection, candidate, rank=rank)
 
         for index, candidate in enumerate(ranked):
             collection, event = by_symbol[candidate.symbol]
@@ -559,6 +573,44 @@ class ThetaTrapRuntime:
                     run["run_id"], "NO_TRADE", "ALL_CANDIDATES_REJECTED", {}
                 )
         return {"status": "no_trade", "reason": "ALL_CANDIDATES_REJECTED"}
+
+    async def rehearse_entry(
+        self,
+        snapshot: BrokerSnapshot,
+        now: datetime,
+        *,
+        strategy_date: date,
+    ) -> dict[str, Any]:
+        """Exercise the real entry pipeline in a broker-mutation-proof replay role.
+
+        The caller must provide a disposable replay store.  Live timestamps are
+        retained for every quote-freshness gate while the requested future event
+        set is selected explicitly.  This method never bypasses a strategy gate.
+        """
+
+        if (
+            self.settings.environment != "replay"
+            or not self.settings.read_only
+            or self.settings.execution_enabled
+        ):
+            raise PolicyError("decision rehearsal requires the disarmed replay role")
+        if not snapshot.market_is_open:
+            raise PolicyError("decision rehearsal requires an open market")
+        if snapshot.positions or snapshot.open_orders:
+            raise PolicyError(
+                "decision rehearsal requires a flat account with no open orders"
+            )
+        events = verified_events_for_day(self.events, strategy_date)
+        if not events:
+            raise PolicyError(
+                "decision rehearsal date has no verified event in frozen configuration"
+            )
+        return await self._scan_entry(
+            snapshot,
+            now,
+            events_override=events,
+            strategy_date_override=strategy_date,
+        )
 
     async def _review_candidate(
         self,
@@ -594,11 +646,18 @@ class ThetaTrapRuntime:
         tools = RuntimeAgentTools(
             self.connection,
             context,
-            verified_events=[item.model_dump(mode="json") for item in self.events.events if item.status == "verified"],
+            verified_events=[
+                item.model_dump(mode="json")
+                for item in self.events.events
+                if item.status == "verified"
+            ],
         )
-        agent_run_id = "tt-agent-" + hashlib.sha256(
-            f"{run['run_id']}|{candidate_id}".encode("utf-8")
-        ).hexdigest()[:32]
+        agent_run_id = (
+            "tt-agent-"
+            + hashlib.sha256(
+                f"{run['run_id']}|{candidate_id}".encode("utf-8")
+            ).hexdigest()[:32]
+        )
         agent_config_hash = payload_hash(
             {
                 "primary": self.settings.featherless_primary_model,
@@ -673,7 +732,6 @@ class ThetaTrapRuntime:
                     chain_id=intent.chain_id,
                     attempt_id=intent.attempt_id,
                     arguments=intent.arguments,
-                    now=now,
                 )
                 return _result_dict("entry", result)
 
@@ -718,12 +776,11 @@ class ThetaTrapRuntime:
             symbol=event.symbol,
             trade_expiration=self.events.trade_expiration,
             term_expiration=self.events.term_expiration,
-            now=now,
         )
         self._persist_collection(run["run_id"], collection)
         evaluation = evaluate_symbol(
             symbol=event.symbol,
-            observed_at=now,
+            observed_at=collection.collected_at,
             underlying=collection.underlying,
             front_chain=collection.front_chain,
             back_chain=collection.back_chain,
@@ -858,11 +915,17 @@ class ThetaTrapRuntime:
             current_credit = -current_price
             next_credit = max(natural, current_credit - Decimal("0.05"))
             if next_credit >= current_credit:
-                return {"status": "monitoring_entry", "repriced": False, "at_natural": True}
+                return {
+                    "status": "monitoring_entry",
+                    "repriced": False,
+                    "at_natural": True,
+                }
             limit_price = "-" + _wire_decimal(next_credit)
             template = entry["payload"]
         else:
-            entry_intents = self.store.list_order_intents(run["run_id"], purpose="entry")
+            entry_intents = self.store.list_order_intents(
+                run["run_id"], purpose="entry"
+            )
             if not entry_intents:
                 return {"status": "risk_off", "reason": "ENTRY_INTENT_MISSING"}
             quote = await quote_atomic_exit(
@@ -871,14 +934,19 @@ class ThetaTrapRuntime:
             wing_width = _wing_width(entry_intents[0]["payload"])
             target = (
                 wing_width
-                if to_market_time(now).time() >= datetime.strptime("09:53", "%H:%M").time()
+                if to_market_time(now).time()
+                >= datetime.strptime("09:53", "%H:%M").time()
                 else min(wing_width, quote.natural_debit)
             )
             next_debit = min(target, current_price + Decimal("0.05"))
             if to_market_time(now).time() >= datetime.strptime("09:53", "%H:%M").time():
                 next_debit = wing_width
             if next_debit <= current_price:
-                return {"status": "monitoring_exit", "repriced": False, "at_natural": True}
+                return {
+                    "status": "monitoring_exit",
+                    "repriced": False,
+                    "at_natural": True,
+                }
             limit_price = _wire_decimal(next_debit)
             template = None
 
@@ -962,7 +1030,12 @@ class ThetaTrapRuntime:
         )
 
     def _persist_evaluation(
-        self, run_id: str, collection: MarketCollection, evaluation: Any, *, rank: int | None
+        self,
+        run_id: str,
+        collection: MarketCollection,
+        evaluation: Any,
+        *,
+        rank: int | None,
     ) -> str:
         candidate_id = _candidate_id(run_id, collection)
         self.store.record_candidate(
