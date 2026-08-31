@@ -102,6 +102,8 @@ The deployed `v1.0.3-hackathon` release passes **191 automated tests**. A creden
 
 Do not read a zero-trade replay or an unchanged account as profitability evidence. Final claims must come from the submitted competition account's timestamped equity and order history. See the sanitized [replay summary](evidence/replay-summary.md) and [release validation summary](evidence/validation-summary.md). Credentials, SQLite databases, and raw worker logs do not belong in public evidence.
 
+Submission collateral: [one-page PDF](docs/submission/ThetaTrap-One-Page.pdf) · [six-slide PDF](docs/submission/ThetaTrap-Hackathon-Deck.pdf) · [editable PowerPoint](docs/submission/ThetaTrap-Hackathon-Deck.pptx)
+
 ## Quick start
 
 Python 3.12 and [`uv`](https://docs.astral.sh/uv/) are required.

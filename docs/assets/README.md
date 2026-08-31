@@ -13,7 +13,7 @@ Only public, credential-free media belongs in this directory. Before adding an i
 | `public-dashboard-evidence.png` | Submission gallery | Qwen, order, position, equity, and limitations area |
 | `public-dashboard-mobile.png` | Responsive proof | Public page at 390 by 844 with no horizontal overflow |
 
-The dashboard screenshots currently show the local disarmed readiness state. Replace or supplement them with sanitized competition evidence only after broker reconciliation.
+The dashboard screenshots show the live, disarmed competition readiness state captured on August 31, 2026. They are sanitized baseline evidence only: the account is flat at `$100,000.00`, with zero orders and no Qwen trading decision yet. Replace or supplement them after broker reconciliation if the official window produces a filled trade, an unfilled order, or an agent veto.
 
 ## Publication rules
 

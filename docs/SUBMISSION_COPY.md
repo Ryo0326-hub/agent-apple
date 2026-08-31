@@ -36,7 +36,7 @@ ThetaTrap uses Alpaca Basic indicative data and simulated paper fills. It does n
 ## Links
 
 - Repository: https://github.com/Ryo0326-hub/agent-apple
-- Live read-only dashboard: **PRE-SUBMISSION — add HTTPS URL**
+- Live read-only dashboard: https://104-236-77-186.sslip.io/
 - Demo video: **PRE-SUBMISSION — add public URL**
 - Final report: **PRE-SUBMISSION — add repository URL**
 - LinkedIn post: **PRE-SUBMISSION — add post URL**

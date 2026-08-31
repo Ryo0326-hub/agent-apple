@@ -62,19 +62,20 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 **Visual:** State timeline from candidate to flat, with timeout/restart branches.
 
-## Slide 5 — Evidence and official outcome
+## Slide 5 — Live evidence and official outcome
 
-**Headline:** Inspectable from model decision to account equity
+**Headline:** A live, read-only trail from agent state to account equity
 
-**On-slide copy before the official run:**
+**On-slide copy for the disarmed baseline:**
 
 - Integrated release: 191 automated tests passing.
-- Five broker-isolated replay scenarios.
-- Pinned Alpaca MCP package and required-tool schema hash.
-- Public/private dashboard isolation and broker-isolated replay verified.
-- **PRE-SUBMISSION:** add the first competition-order canary outcome, cloud restart proof, filled count, final equity, realized P&L, report digest, and deployed Git SHA.
+- Live paper baseline: `$100,000`, flat, and zero orders on August 31.
+- MCP and worker: `READY` after the Droplet read-only smoke test.
+- Baseline evidence only; final equity and P&L remain broker-reconciled paper results, never replay output.
 
-**Visual:** Dashboard screenshot and a small evidence table. If no trade fills, show the exact no-trade/unfilled reason instead of a simulated result.
+**Visual:** Sanitized live public-dashboard screenshot beside the three evidence cards. After the official run, replace or supplement the baseline with the filled, unfilled, or veto outcome and the final flat-account evidence.
+
+**Speaker note:** The screenshot is the live, disarmed competition baseline captured on August 31, 2026. State the actual competition result only after broker reconciliation.
 
 ## Slide 6 — What this proves, and what comes next
 

@@ -35,4 +35,4 @@ ThetaTrap is paper-only. Indicative quotes are not consolidated OPRA data, paper
 
 Repository: https://github.com/Ryo0326-hub/agent-apple
 
-Dashboard: **PRE-SUBMISSION — add HTTPS URL** · Demo: **PRE-SUBMISSION — add URL**
+Dashboard: https://104-236-77-186.sslip.io/ · Demo: **PRE-SUBMISSION — add URL**
