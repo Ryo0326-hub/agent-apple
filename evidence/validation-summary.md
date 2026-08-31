@@ -4,7 +4,7 @@ Validated on August 31, 2026. This includes credentialed read-only checks agains
 
 | Gate | Result |
 | --- | --- |
-| Automated suite | `190 passed` |
+| Automated suite | `191 passed` |
 | Python compilation | Pass |
 | Locked dependencies | `uv lock --check` passed; 104 packages resolved |
 | Broker-isolated replay | `5 / 5` scenarios; zero external mutations |

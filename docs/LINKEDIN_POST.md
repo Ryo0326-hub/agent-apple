@@ -12,7 +12,7 @@ ThetaTrap separates those responsibilities. Featherless-hosted Qwen calls tools 
 
 For the competition, I froze seven eligible earnings events and deliberately excluded two: DELL because its release time was ambiguous, and NTAP because the required weekly expirations were unavailable. The agent can review up to two candidates sequentially, but it receives only one broker entry attempt per strategy date.
 
-The integrated release has 190 passing automated tests, five broker-isolated replay scenarios, restart recovery, one-shot authorization, automatic exit, and private/public Streamlit dashboards.
+The integrated release has 191 passing automated tests, five broker-isolated replay scenarios, restart recovery, one-shot authorization, automatic exit, and private/public Streamlit dashboards.
 
 **PRE-SUBMISSION RESULT: add the official paper-account outcome here. If no trade filled, say that clearly.**
 

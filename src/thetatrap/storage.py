@@ -157,6 +157,16 @@ class Store:
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=5000")
         connection.execute("PRAGMA journal_mode=WAL")
+        # Keep SQLite's WAL/index sidecars after the last writer closes.  The
+        # public dashboard mounts this directory read-only; SQLite can safely
+        # open a WAL database there only when both sidecars already exist.
+        # Python 3.12 exposes the matching SQLite database configuration, but
+        # guard it for platforms whose bundled SQLite omits the constant.
+        no_checkpoint_on_close = getattr(
+            sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE", None
+        )
+        if no_checkpoint_on_close is not None:
+            connection.setconfig(no_checkpoint_on_close, True)
         try:
             yield connection
             connection.commit()

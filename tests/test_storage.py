@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -20,6 +21,30 @@ def test_database_initialization_is_idempotent(tmp_path: Path) -> None:
         busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
     assert journal_mode == "wal"
     assert busy_timeout == 5000
+
+
+def test_wal_sidecars_persist_for_read_only_dashboard(tmp_path: Path) -> None:
+    if not hasattr(sqlite3, "SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE"):
+        pytest.skip("bundled SQLite does not expose persistent WAL configuration")
+
+    path = tmp_path / "state.sqlite3"
+    store = Store(path)
+    store.initialize()
+    store.bind_identity("competition", "account-a", "account-a")
+
+    wal_path = Path(f"{path}-wal")
+    shm_path = Path(f"{path}-shm")
+    assert wal_path.is_file()
+    assert shm_path.is_file()
+
+    # A container with a read-only volume cannot create SQLite sidecars.  The
+    # persisted files let a URI read-only connection open the live WAL database.
+    uri = f"file:{quote(str(path), safe='/')}?mode=ro"
+    with sqlite3.connect(uri, uri=True) as connection:
+        metadata_count = connection.execute(
+            "SELECT COUNT(*) FROM metadata"
+        ).fetchone()[0]
+    assert metadata_count >= 1
 
 
 def test_database_identity_cannot_change(tmp_path: Path) -> None:
