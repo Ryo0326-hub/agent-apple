@@ -48,6 +48,6 @@ The model received only summary/redacted tool results. The audit database stores
 - The public container has zero Alpaca or Featherless environment keys, a read-only database mount, a read-only root filesystem, and access only to the edge network.
 - The private operator dashboard binds only to server loopback and exposes the kill-switch control through an SSH tunnel.
 - Desktop (`1440x900`) and mobile (`390x844`) browser checks rendered live evidence without horizontal overflow; the public view contained no form or input controls.
-- Restarting the worker preserved the same SQLite inode and persistent WAL state. Entry-authorization, order-attempt, and order-event counts remained zero; the post-restart broker preflight confirmed zero open positions and zero open orders.
+- Restarting the worker preserved the same SQLite inode and persistent WAL state. Entry-authorization and order-attempt counts remained zero, no order chain or fill was recorded, and the post-restart broker preflight confirmed zero open positions and zero open orders.
 
 No order was authorized, submitted, replaced, canceled, or filled during these checks. This evidence establishes connectivity and release readiness only; it does not establish profitability.
