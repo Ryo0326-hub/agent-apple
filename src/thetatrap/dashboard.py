@@ -214,7 +214,13 @@ def _render_runtime(report: Mapping[str, Any]) -> None:
     session = _mapping(mcp.get("latest_session"))
     columns = st.columns(5)
     columns[0].metric("Last heartbeat", _short_time(health.get("observed_at")))
-    columns[1].metric("MCP", str(session.get("status", "not connected")).upper())
+    columns[1].metric(
+        "MCP",
+        str(
+            mcp.get("operational_status")
+            or session.get("status", "not connected")
+        ).upper(),
+    )
     columns[2].metric("MCP tools", session.get("tool_count", "n/a"))
     columns[3].metric("MCP package", session.get("package_version", "n/a"))
     columns[4].metric("One-shot entry", one_shot_entry.get("state", "MISSING"))

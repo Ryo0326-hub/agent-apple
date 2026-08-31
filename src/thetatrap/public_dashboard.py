@@ -134,7 +134,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
             ),
         },
         "mcp": {
-            "status": session.get("status"),
+            "status": mcp.get("operational_status") or session.get("status"),
             "package_version": session.get("package_version"),
             "tool_count": session.get("tool_count"),
             "required_schema_hash": session.get("required_schema_hash"),

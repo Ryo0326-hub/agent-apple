@@ -47,6 +47,7 @@ def populated_store(tmp_path: Path) -> Store:
         "ok",
         12,
     )
+    store.finish_mcp_session("mcp-1", "closed")
 
     store.create_strategy_run(
         "run-1",
@@ -241,6 +242,8 @@ def test_report_reconciles_strategy_agent_orders_positions_and_equity(tmp_path: 
     assert report["mode"]["banner"] == "PAPER · TRADING DISARMED"
     assert report["mode"]["data_feed"] == "BASIC INDICATIVE"
     assert report["identity"]["account_suffix"] == "…456789"
+    assert report["mcp"]["latest_session"]["status"] == "closed"
+    assert report["mcp"]["operational_status"] == "ready"
     assert report["strategy"]["current_run"]["state"] == "POSITION_OPEN"
     assert report["candidate"]["selected"]["symbol"] == "PANW"
     assert [

@@ -445,13 +445,21 @@ def _mcp_summary(
             (MAX_RECENT_ROWS,),
         ).fetchall()
         calls = [dict(row) for row in rows]
+    last_successful_call = next(
+        (call for call in calls if str(call.get("status", "")).lower() == "ok"),
+        None,
+    )
+    raw_status = str((session or {}).get("status") or "").lower()
+    operational_status = (
+        "ready"
+        if raw_status == "closed" and last_successful_call is not None
+        else raw_status or "not_connected"
+    )
     return {
         "latest_session": session,
+        "operational_status": operational_status,
         "recent_calls": calls,
-        "last_successful_call": next(
-            (call for call in calls if str(call.get("status", "")).lower() == "ok"),
-            None,
-        ),
+        "last_successful_call": last_successful_call,
     }
 
 

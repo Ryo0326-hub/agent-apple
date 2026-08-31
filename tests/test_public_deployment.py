@@ -30,9 +30,10 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
         "identity": {"account_suffix": "…174000", "account_id": account_uuid},
         "health": {"status": "healthy", "observed_at": "now"},
         "mcp": {
+            "operational_status": "ready",
             "latest_session": {
                 "session_id": "session-private",
-                "status": "healthy",
+                "status": "closed",
                 "package_version": "2.3.0",
                 "tool_count": 54,
             }
@@ -130,6 +131,7 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
     assert REDACTED in serialized
     assert view["account"]["suffix"] == "…174000"
     assert view["health"]["stale"] is True
+    assert view["mcp"]["status"] == "ready"
     assert view["orders"]["chain_count"] == 1
     assert view["orders"]["fill_count"] == 4
     assert view["portfolio"]["observed_change"] == "70.00"
