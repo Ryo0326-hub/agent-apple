@@ -1,12 +1,22 @@
 # Competition account read-only readiness evidence
 
-Captured on August 31, 2026 against the dedicated Alpaca paper competition account. Identifiers, credentials, raw broker payloads, and database files are intentionally excluded.
+Captured on August 31, 2026 from the deployed DigitalOcean competition image against the dedicated Alpaca paper competition account. Identifiers, credentials, raw broker payloads, and database files are intentionally excluded.
+
+## Deployed release
+
+| Field | Sanitized result |
+| --- | --- |
+| Release | `v1.0.2-hackathon` |
+| Git commit | `f16a93de5df4e3bfd29b82be4cb3e3359c742c4b` |
+| Public dashboard | `https://104-236-77-186.sslip.io/` |
+| HTTPS | Valid certificate; HTTP redirects to HTTPS |
+| Worker mode | Long-running, paper-only, execution disarmed |
 
 ## Qwen and official MCP smoke
 
 | Field | Sanitized result |
 | --- | --- |
-| Completed | `2026-08-31T16:49:57Z` |
+| Completed | `2026-08-31T17:33:02Z` |
 | Outcome | `PASS` |
 | Model | `Qwen/Qwen3-Coder-Next` |
 | Model turns | `2` |
@@ -22,7 +32,7 @@ The model received only summary/redacted tool results. The audit database stores
 
 | Field | Sanitized result |
 | --- | --- |
-| Observed | `2026-08-31T16:50:18Z` |
+| Observed | `2026-08-31T17:33:21Z` |
 | Environment | `competition` |
 | Broker mode | Paper |
 | Account status | `ACTIVE` |
@@ -33,4 +43,11 @@ The model received only summary/redacted tool results. The audit database stores
 | Execution | Disarmed |
 | Entry authorization | Missing, as required for deployment day |
 
-No order was authorized, submitted, replaced, canceled, or filled during either check. This evidence establishes connectivity and release readiness only; it does not establish profitability.
+## Cloud isolation and recovery
+
+- The public container has zero Alpaca or Featherless environment keys, a read-only database mount, a read-only root filesystem, and access only to the edge network.
+- The private operator dashboard binds only to server loopback and exposes the kill-switch control through an SSH tunnel.
+- Desktop (`1440x900`) and mobile (`390x844`) browser checks rendered live evidence without horizontal overflow; the public view contained no form or input controls.
+- Restarting the worker preserved the same SQLite inode and persistent WAL state. Entry-authorization, order-attempt, and order-event counts remained zero; the post-restart broker preflight confirmed zero open positions and zero open orders.
+
+No order was authorized, submitted, replaced, canceled, or filled during these checks. This evidence establishes connectivity and release readiness only; it does not establish profitability.

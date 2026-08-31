@@ -23,12 +23,12 @@ The team—not the judges—runs the worker against the submitted paper-account 
 
 ## Account separation
 
-- [ ] Testing account UUID, key pair, env file, and SQLite path differ from competition.
-- [ ] Testing account remains stopped/disarmed and is used only for local fixtures and broker-isolated replay.
+- [x] Testing account UUID, key pair, env file, and SQLite path differ from competition.
+- [x] Testing account remains stopped/disarmed and is used only for local fixtures and broker-isolated replay.
 - [ ] The first competition-account live order is treated as the controlled canary after all read-only release gates pass.
-- [ ] Competition account is fresh, starts at `$100,000`, has options level 3, is flat, and has no open orders.
-- [ ] Competition credentials exist only in the protected competition env file and the credentialed worker.
-- [ ] No second worker uses the competition account.
+- [x] Competition account is fresh, starts at `$100,000`, has options level 3, is flat, and has no open orders.
+- [x] Competition credentials exist only in the protected competition env file and the credentialed worker.
+- [x] No second worker uses the competition account.
 - [ ] The exact account identifier requested by LabLab/Alpaca is copied from the authoritative portal, not guessed.
 
 ## Software release gates
@@ -42,30 +42,31 @@ The team—not the judges—runs the worker against the submitted paper-account 
 - [x] Competition read-only preflight verifies account suffix, ACTIVE status, level 3, `$100,000` equity, flat positions, zero open orders, clock, and MCP schema.
 - [ ] One date/account/environment-bound entry authorization is recorded before startup and after consumption, revocation, or expiry.
 - [ ] The armed service is the continuous worker; `worker --once` is not used while execution is enabled.
-- [ ] Droplet worker survives a restart and reconciles the same persisted state.
+- [x] Droplet worker survives a restart and reconciles the same persisted state.
 - [ ] Final account is reconciled to zero positions and zero open orders.
 
 ## Repository release gates
 
-- [ ] Secret scan finds no env file, key, secret, token, full account UUID, database, raw log, or Droplet access detail.
-- [ ] `main` contains the reviewed source, lockfile, examples, MIT license, CI workflow, and documentation.
-- [ ] GitHub Actions passes on the submitted revision.
-- [ ] Repository About section has the project description, topics, public dashboard URL, and social-preview image.
-- [ ] README links work while signed out.
-- [ ] Deployed Git SHA is recorded in `evidence/deployed-revision.txt` and matches the Droplet checkout.
+- [x] Secret scan finds no env file, key, secret, token, full account UUID, database, or raw log in tracked content.
+- [x] `main` contains the reviewed source, lockfile, examples, MIT license, CI workflow, and documentation.
+- [x] GitHub Actions passes on the submitted revision.
+- [x] Repository About section has the project description, topics, and public dashboard URL.
+- [ ] GitHub social-preview image is confirmed in the repository settings UI.
+- [x] README links work while signed out.
+- [x] Deployed Git SHA is recorded in `evidence/deployed-revision.txt` and matches the Droplet checkout.
 - [ ] Sanitized replay, validation, canary, and competition reports are committed or linked.
 - [ ] Pre-hackathon/reused assets are disclosed accurately in [DISCLOSURES.md](DISCLOSURES.md).
 
 ## Dashboard and cloud gates
 
-- [ ] Worker and private operator dashboard run on the competition Droplet with persistent SQLite state.
-- [ ] Private operator dashboard remains loopback-only and is accessed through SSH.
-- [ ] Public judge dashboard is status-only, has no mutation route, and uses a read-only data mount or snapshot.
-- [ ] Public dashboard container has no Alpaca or Featherless credentials.
-- [ ] Public page shows paper/basic-indicative labels, worker freshness, candidate/decision state, position state, and official account outcome.
-- [ ] Public page auto-refreshes and shows a stale-data warning when the worker heartbeat ages out.
-- [ ] HTTPS URL works in a signed-out browser on desktop and mobile.
-- [ ] Kill-switch state may be visible publicly, but activation and clearing controls exist only in the private operator surface.
+- [x] Worker and private operator dashboard run on the competition Droplet with persistent SQLite state.
+- [x] Private operator dashboard remains loopback-only and is accessed through SSH.
+- [x] Public judge dashboard is status-only, has no mutation route, and uses a read-only data mount or snapshot.
+- [x] Public dashboard container has no Alpaca or Featherless credentials.
+- [x] Public page shows paper/basic-indicative labels, worker freshness, candidate/decision state, position state, and official account outcome.
+- [x] Public page auto-refreshes and shows a stale-data warning when the worker heartbeat ages out.
+- [x] HTTPS URL works in a signed-out browser on desktop and mobile.
+- [x] Kill-switch state may be visible publicly, but activation and clearing controls exist only in the private operator surface.
 - [ ] Firewall exposes only SSH from the operator address plus HTTP/HTTPS for the public viewer; port 8501 is not public.
 - [ ] Database volume backup and final-report export have been tested.
 

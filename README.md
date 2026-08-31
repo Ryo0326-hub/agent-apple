@@ -2,7 +2,7 @@
 
 > A bounded, MCP-native AI agent for defined-risk Alpaca paper-options trading around verified earnings events.
 
-[Hackathon](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon) · [Product requirements](docs/PRD.md) · [Deployment runbook](docs/DEPLOYMENT.md) · [Submission package](docs/SUBMISSION.md)
+[Live dashboard](https://104-236-77-186.sslip.io/) · [Hackathon](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon) · [Product requirements](docs/PRD.md) · [Deployment runbook](docs/DEPLOYMENT.md) · [Submission package](docs/SUBMISSION.md)
 
 ![ThetaTrap cover](docs/assets/thetatrap-cover-1200x630.png)
 
@@ -28,7 +28,7 @@ ThetaTrap is a hackathon engineering prototype. It uses Alpaca Basic indicative 
 | Verification baseline | 191 automated tests passing |
 | Competition result | **PRE-SUBMISSION:** official fills, final equity, and realized P&L not yet recorded |
 
-**PRE-SUBMISSION LINKS:** add the public read-only dashboard, demo video, final report, and LabLab project page after they are available.
+**LIVE NOW:** the [public read-only competition dashboard](https://104-236-77-186.sslip.io/) is running from `v1.0.2-hackathon`. Add the demo video, final report, and LabLab project page after the competition result is available.
 
 ## How the strategy works
 
@@ -98,7 +98,7 @@ The first-party announcements and exclusion evidence are recorded in [docs/EVENT
 
 ## Evidence and current status
 
-The integrated release passes **191 automated tests**. A credentialed competition-account smoke run completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. The five-scenario replay makes zero external broker mutations. The testing account remains stopped/disarmed and is used only for local fixtures and replay. The first competition-account live order is itself the controlled canary after all read-only release gates pass.
+The deployed `v1.0.2-hackathon` release passes **191 automated tests**. A credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. Cloud restart recovery preserved the same database and zero order attempts. The five-scenario replay makes zero external broker mutations. The testing account remains stopped/disarmed and is used only for local fixtures and replay. The first competition-account live order is itself the controlled canary after all read-only release gates pass.
 
 Do not read a zero-trade replay or an unchanged account as profitability evidence. Final claims must come from the submitted competition account's timestamped equity and order history. See the sanitized [replay summary](evidence/replay-summary.md) and [release validation summary](evidence/validation-summary.md). Credentials, SQLite databases, and raw worker logs do not belong in public evidence.
 

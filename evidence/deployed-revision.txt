@@ -1,0 +1,8 @@
+ThetaTrap competition deployment
+tag=v1.0.2-hackathon
+commit=f16a93de5df4e3bfd29b82be4cb3e3359c742c4b
+public_dashboard=https://104-236-77-186.sslip.io/
+captured_at=2026-08-31T17:33:21Z
+environment=competition
+paper_mode=true
+execution=disarmed
