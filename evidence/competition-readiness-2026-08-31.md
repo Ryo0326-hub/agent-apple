@@ -6,8 +6,8 @@ Captured on August 31, 2026 from the deployed DigitalOcean competition image aga
 
 | Field | Sanitized result |
 | --- | --- |
-| Release | `v1.0.2-hackathon` |
-| Git commit | `f16a93de5df4e3bfd29b82be4cb3e3359c742c4b` |
+| Release | `v1.0.3-hackathon` |
+| Git commit | `29edcb8ffe4f774d02e4e366f8c4a6372f06bf09` |
 | Public dashboard | `https://104-236-77-186.sslip.io/` |
 | HTTPS | Valid certificate; HTTP redirects to HTTPS |
 | Worker mode | Long-running, paper-only, execution disarmed |
@@ -16,7 +16,7 @@ Captured on August 31, 2026 from the deployed DigitalOcean competition image aga
 
 | Field | Sanitized result |
 | --- | --- |
-| Completed | `2026-08-31T17:33:02Z` |
+| Completed | `2026-08-31T17:46:51Z` |
 | Outcome | `PASS` |
 | Model | `Qwen/Qwen3-Coder-Next` |
 | Model turns | `2` |
@@ -32,7 +32,7 @@ The model received only summary/redacted tool results. The audit database stores
 
 | Field | Sanitized result |
 | --- | --- |
-| Observed | `2026-08-31T17:33:21Z` |
+| Observed | `2026-08-31T17:46:14Z` |
 | Environment | `competition` |
 | Broker mode | Paper |
 | Account status | `ACTIVE` |

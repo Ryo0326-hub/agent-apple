@@ -4,7 +4,7 @@ Validated on August 31, 2026. This includes credentialed read-only checks agains
 
 | Gate | Result |
 | --- | --- |
-| Deployed release | `v1.0.2-hackathon` at `f16a93de5df4e3bfd29b82be4cb3e3359c742c4b` |
+| Deployed release | `v1.0.3-hackathon` at `29edcb8ffe4f774d02e4e366f8c4a6372f06bf09` |
 | Public dashboard | `https://104-236-77-186.sslip.io/`; valid HTTPS and HTTP redirect |
 | Automated suite | `191 passed` |
 | Python compilation | Pass |
