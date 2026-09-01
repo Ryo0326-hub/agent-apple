@@ -12,6 +12,8 @@ The worker starts from a frozen, first-party-sourced schedule. Seven events are 
 
 For each strategy date, deterministic code retrieves Alpaca Basic indicative option chains and IEX quotes through the official Alpaca MCP server. It measures the volatility term structure and expected move, checks freshness and liquidity, and builds a symmetric one-contract iron condor. Maximum loss cannot exceed the lower of `$500` or `0.5%` of equity.
 
+The Basic competition profile is explicit and fail-closed: `ALPACA_STOCK_FEED=iex` and `ALPACA_OPTION_FEED=indicative`. If the nearest short strike has missing or unusable Basic data, deterministic code may search farther outside the expected move, but every original liquidity and risk gate still applies.
+
 Up to two ranked candidates may be reviewed sequentially before broker dispatch. Featherless-hosted Qwen calls approved account, market, order, position, and news tools. It either vetoes a candidate for a finite event-risk reason or issues the exact pre-authorized order call. Once one initial broker entry attempt is dispatched, no second candidate can reach the broker that date.
 
 ## Judgment with bounded authority
@@ -20,12 +22,16 @@ Qwen cannot change the universe, expiration, strikes, quantity, price, or risk. 
 
 Repricing, cancellation, timeout reconciliation, restart recovery, and next-morning exit remain deterministic. A reported exit fill becomes `FLAT` only after a later broker snapshot confirms no positions and no open orders. The private dashboard owns controls; the public dashboard is read-only and credential-free.
 
+When every candidate is rejected before execution review, a separately labeled Qwen advisory may call six bounded read-only Alpaca MCP tools to explain the best rejection. It cannot change the candidate, authorize an order, or advance strategy state.
+
 ## Evidence and result
 
-- Integrated release: 191 automated tests passing.
+- Integrated release: 219 automated tests passing.
 - Five simulation-only replay scenarios with zero external broker mutations.
 - Pinned `alpaca-mcp-server==2.3.0` and required-tool schema hash.
 - Persistent audit linking evidence, model decisions, policy, authorizations, orders, positions, and equity.
+
+September 1 interim: 176 deterministic candidate evaluations across PANW, MDB, CRDO, and GTLB produced no eligible structure, zero broker order attempts, and zero fills. The paper account remained flat at `$100,000`. September 2 remains pending.
 
 **PRE-SUBMISSION RESULT:** add the first competition-order canary outcome, filled count, starting/final equity, realized P&L, report digest/URL, and deployed Git revision. If no order fills, say so and preserve the recorded reason.
 

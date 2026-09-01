@@ -9,6 +9,10 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Callable
 
+from thetatrap.advisory import (
+    AdvisoryAgentFactory,
+    run_rejected_candidate_advisory,
+)
 from thetatrap.agent import AgentContext, AgentOutcome, QwenAgent
 from thetatrap.agent_tools import RuntimeAgentTools
 from thetatrap.errors import PolicyError
@@ -71,6 +75,7 @@ class ThetaTrapRuntime:
         events: EventConfig | None = None,
         strategy_config: StrategyConfig | None = None,
         agent_factory: AgentFactory | None = None,
+        advisory_agent_factory: AdvisoryAgentFactory | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -82,10 +87,12 @@ class ThetaTrapRuntime:
         self.agent_factory = agent_factory or (
             lambda configured, tools: QwenAgent(configured, tools)
         )
+        self.advisory_agent_factory = advisory_agent_factory
         self.config_hash = payload_hash(
             {
                 "events": self.events.model_dump(mode="json"),
                 "strategy": serialize_for_storage(self.strategy_config),
+                "market_data_profile": self.settings.market_data_status(),
             }
         )
 
@@ -188,6 +195,7 @@ class ThetaTrapRuntime:
             "position_count": len(snapshot.positions),
             "open_order_count": len(snapshot.open_orders),
             "strategy_state": current_run["state"] if current_run else None,
+            "market_data_profile": self.settings.market_data_status(),
             "required_schema_hash": self.connection.registry.required_schema_hash,
         }
         self.store.record_heartbeat(
@@ -508,6 +516,8 @@ class ThetaTrapRuntime:
                     symbol=event.symbol,
                     trade_expiration=self.events.trade_expiration,
                     term_expiration=self.events.term_expiration,
+                    stock_feed=self.settings.alpaca_stock_feed,
+                    option_feed=self.settings.alpaca_option_feed,
                 )
                 self._persist_collection(run["run_id"], collection)
                 evaluation = evaluate_symbol(
@@ -536,11 +546,21 @@ class ThetaTrapRuntime:
                 )
 
         if not eligible:
+            advisory = await run_rejected_candidate_advisory(
+                self.settings,
+                self.store,
+                self.connection,
+                run_id=run["run_id"],
+                events=[event.model_dump(mode="json") for event in events],
+                now=now,
+                agent_factory=self.advisory_agent_factory,
+            )
             return {
                 "status": "screening",
                 "eligible_candidates": 0,
                 "rejected_candidates": rejected,
                 "collection_errors": collection_errors,
+                "advisory": advisory,
             }
 
         ranked = rank_candidates(item[0] for item in eligible)
@@ -639,6 +659,7 @@ class ThetaTrapRuntime:
                 "environment": self.settings.environment,
                 "paper_only": True,
                 "execution_enabled": self.settings.execution_enabled,
+                "market_data_profile": self.settings.market_data_status(),
             },
             order_intent_id=intent.intent_id,
             order_arguments=intent.arguments,
@@ -856,7 +877,12 @@ class ThetaTrapRuntime:
                 "reason": "ASSIGNMENT_OR_UNMATCHED_LEGS",
                 "manual_broker_intervention_required": True,
             }
-        quote = await quote_atomic_exit(self.connection, entry["payload"], now=now)
+        quote = await quote_atomic_exit(
+            self.connection,
+            entry["payload"],
+            now=now,
+            option_feed=self.settings.alpaca_option_feed,
+        )
         exit_intent = build_exit_from_entry_arguments(
             entry["payload"],
             limit_debit=quote.proposed_debit,
@@ -929,7 +955,10 @@ class ThetaTrapRuntime:
             if not entry_intents:
                 return {"status": "risk_off", "reason": "ENTRY_INTENT_MISSING"}
             quote = await quote_atomic_exit(
-                self.connection, entry_intents[0]["payload"], now=now
+                self.connection,
+                entry_intents[0]["payload"],
+                now=now,
+                option_feed=self.settings.alpaca_option_feed,
             )
             wing_width = _wing_width(entry_intents[0]["payload"])
             target = (
@@ -1016,6 +1045,7 @@ class ThetaTrapRuntime:
                 "symbols": [event.symbol for event in events],
                 "paper_only": True,
                 "data_feed": "basic_indicative",
+                "market_data_profile": self.settings.market_data_status(),
             },
         )
 

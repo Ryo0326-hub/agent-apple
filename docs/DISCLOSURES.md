@@ -15,6 +15,7 @@ This document is the source of truth for public claims in the LabLab entry, READ
 
 - Featherless hosts the open-source Qwen models used for orchestration.
 - Qwen makes a real tool decision: it may veto an otherwise eligible candidate or issue the exact pre-authorized Alpaca MCP entry call.
+- If every candidate fails deterministic gates, a separately labeled Qwen advisory may use six read-only Alpaca MCP tools to explain the best rejection. An advisory cannot construct an order, override a gate, change strategy state, or authorize execution.
 - Deterministic code—not the model—selects the universe, structure, expiration, strikes, quantity, limit price, and risk.
 - Repricing, cancellation, reconciliation, and exit are deterministic lifecycle operations.
 - Every Alpaca read and mutation uses the pinned official Alpaca MCP server. There is no direct Alpaca SDK or REST fallback in application code.
@@ -27,6 +28,7 @@ This document is the source of truth for public claims in the LabLab entry, READ
 - NTAP is excluded as `REQUIRED_WEEKLY_EXPIRATIONS_UNAVAILABLE`; neither September 4 nor September 11 was available, and the nearest observed standard expiration was September 18.
 - The agent may review up to two ranked candidates sequentially before broker dispatch. It permits one initial broker entry attempt per strategy date and at most one filled position.
 - Replacement calls, if needed, remain within the same durable logical order chain; they are not a second strategy opportunity.
+- With Basic indicative data, ThetaTrap searches outward from the expected-move thresholds when the nearest contract lacks usable liquidity metadata. Every alternative contract must remain outside the threshold and pass the same open-interest, quote, spread, credit, wing, and maximum-loss gates.
 
 ## Development and third-party disclosure
 

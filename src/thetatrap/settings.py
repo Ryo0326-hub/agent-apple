@@ -8,6 +8,12 @@ from typing import Literal
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from thetatrap.data_profile import (
+    BASIC_OPTION_FEED,
+    BASIC_STOCK_FEED,
+    MarketDataProfile,
+    require_basic_indicative_profile,
+)
 from thetatrap.errors import ConfigurationError
 
 
@@ -62,6 +68,12 @@ class RuntimeSettings(BaseSettings):
     alpaca_toolsets: str = Field(
         default=REQUIRED_MCP_TOOLSETS_VALUE, validation_alias="ALPACA_TOOLSETS"
     )
+    alpaca_stock_feed: str = Field(
+        default=BASIC_STOCK_FEED, validation_alias="ALPACA_STOCK_FEED"
+    )
+    alpaca_option_feed: str = Field(
+        default=BASIC_OPTION_FEED, validation_alias="ALPACA_OPTION_FEED"
+    )
 
     featherless_api_key: SecretStr | None = Field(
         default=None, validation_alias="FEATHERLESS_API_KEY"
@@ -110,7 +122,22 @@ class RuntimeSettings(BaseSettings):
             raise ValueError("TZ must be America/New_York")
         if self.environment == "competition" and not self.mcp_expected_schema_hash:
             raise ValueError("competition mode requires THETATRAP_MCP_EXPECTED_SCHEMA_HASH")
+        require_basic_indicative_profile(
+            stock_feed=self.alpaca_stock_feed,
+            option_feed=self.alpaca_option_feed,
+        )
         return self
+
+    def market_data_profile(self) -> MarketDataProfile:
+        """Return the validated, public-safe competition data profile."""
+
+        return require_basic_indicative_profile(
+            stock_feed=self.alpaca_stock_feed,
+            option_feed=self.alpaca_option_feed,
+        )
+
+    def market_data_status(self) -> dict[str, object]:
+        return self.market_data_profile().status()
 
     def require_alpaca_credentials(self) -> None:
         required = {
@@ -152,6 +179,7 @@ class RuntimeSettings(BaseSettings):
             "execution_enabled": self.execution_enabled,
             "alpaca_paper_trade": self.alpaca_paper_trade,
             "alpaca_toolsets": self.alpaca_toolsets,
+            "market_data_profile": self.market_data_status(),
             "mcp_expected_schema_hash": self.mcp_expected_schema_hash,
             "alpaca_credentials_present": all(
                 value and not value.lower().startswith(PLACEHOLDER_PREFIX)

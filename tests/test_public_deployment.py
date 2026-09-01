@@ -36,7 +36,16 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
                 "status": "closed",
                 "package_version": "2.3.0",
                 "tool_count": 54,
-            }
+            },
+            "timeline": [
+                {
+                    "called_at": "2026-09-02T18:50:00Z",
+                    "principal": "agent",
+                    "tool_name": "get_clock",
+                    "status": "ok",
+                    "duration_ms": 11,
+                }
+            ],
         },
         "kill_switch": {"known": True, "enabled": False},
         "one_shot_entry": {
@@ -49,7 +58,18 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
                 "run_id": "run-private",
                 "state": "POLICY_CHECK",
                 "strategy_date": "2026-09-02",
-            }
+            },
+            "run_history": [{"run_id": "run-private"}],
+            "transition_history": [
+                {
+                    "run_id": "run-private",
+                    "strategy_date": "2026-09-02",
+                    "from_state": "SCREENING",
+                    "to_state": "AI_REVIEW",
+                    "reason_code": "CANDIDATE_ELIGIBLE",
+                    "transitioned_at": "2026-09-02T18:50:00Z",
+                }
+            ],
         },
         "candidate": {
             "selected": {
@@ -65,6 +85,60 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
             },
             "latest_gate_outcomes": [
                 {"gate_name": "MAX_LOSS", "passed": True, "candidate_id": "private"}
+            ],
+            "history": [
+                {
+                    "candidate_id": "candidate-private",
+                    "run_id": "run-private",
+                    "strategy_date": "2026-09-02",
+                    "scanned_at": "2026-09-02T18:50:00Z",
+                    "symbol": "SNOW",
+                    "candidate_rank": 1,
+                    "eligible": True,
+                    "payload": {
+                        "iv_ratio": "1.20",
+                        "maximum_loss": "450.00",
+                    },
+                    "gates": [
+                        {
+                            "candidate_id": "candidate-private",
+                            "gate_name": "ALL_DETERMINISTIC_GATES",
+                            "passed": True,
+                        }
+                    ],
+                },
+                {
+                    "candidate_id": "candidate-rejected-private",
+                    "run_id": "run-private",
+                    "strategy_date": "2026-09-02",
+                    "scanned_at": "2026-09-02T18:49:00Z",
+                    "symbol": "AVGO",
+                    "eligible": False,
+                    "payload": {
+                        "failures": [
+                            {
+                                "code": "IV_RATIO_LOW",
+                                "detail": "below frozen minimum",
+                            }
+                        ]
+                    },
+                    "failed_gate_names": ["IV_RATIO_LOW"],
+                },
+            ],
+            "scan_matrix": [
+                {
+                    "symbol": "SNOW",
+                    "event_date": "2026-09-02",
+                    "configured_status": "VERIFIED",
+                    "latest_result": "ELIGIBLE",
+                    "evaluation_count": 1,
+                    "eligible_count": 1,
+                    "latest_scanned_at": "2026-09-02T18:50:00Z",
+                    "latest_payload": {
+                        "iv_ratio": "1.20",
+                        "maximum_loss": "450.00",
+                    },
+                }
             ],
         },
         "agent": {
@@ -84,6 +158,56 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
                         "order_id": "order-private",
                         "account_id": account_uuid,
                     },
+                }
+            ],
+            "reviews": [
+                {
+                    "agent_run_id": "agent-private",
+                    "run_id": "run-private",
+                    "candidate_id": "candidate-private",
+                    "strategy_date": "2026-09-02",
+                    "symbol": "SNOW",
+                    "model": "Qwen/Qwen3-Coder-Next",
+                    "status": "COMPLETED",
+                    "result": {"outcome": "ALLOW"},
+                    "tool_trace": [
+                        {
+                            "sequence": 0,
+                            "is_official_mcp": True,
+                            "tool_name": "get_clock",
+                            "status": "ok",
+                        }
+                    ],
+                }
+            ],
+            "advisories": [
+                {
+                    "advisory_run_id": "advisory-private",
+                    "run_id": "run-private",
+                    "candidate_id": "candidate-rejected-private",
+                    "strategy_date": "2026-09-02",
+                    "symbol": "AVGO",
+                    "mode": "READ_ONLY_REJECTED_CANDIDATE_ADVISORY",
+                    "model": "Qwen/Qwen3-Coder-Next",
+                    "status": "COMPLETED",
+                    "result": {
+                        "assessment": "DETERMINISTIC_REJECTION_CONFIRMED",
+                        "summary": "The IV-ratio gate remains binding.",
+                        "evidence": ["Observed ratio is below the frozen minimum."],
+                        "non_authorizing": True,
+                    },
+                    "tool_trace": [
+                        {
+                            "advisory_run_id": "advisory-private",
+                            "sequence": 0,
+                            "turn": 1,
+                            "tool_name": "get_clock",
+                            "arguments_hash": "a" * 64,
+                            "result_hash": "b" * 64,
+                            "status": "ok",
+                            "duration_ms": 4,
+                        }
+                    ],
                 }
             ],
         },
@@ -107,7 +231,38 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
                 "first": "100000.00",
                 "latest": "100070.00",
                 "observed_change": "70.00",
+                "history": [
+                    {
+                        "observed_at": "2026-09-02T18:50:00Z",
+                        "equity": "100070.00",
+                        "buying_power": "99500.00",
+                    }
+                ],
             },
+        },
+        "safety": {
+            "kill_switch": {"known": True, "enabled": False, "recent_events": []},
+            "entry_permissions": [
+                {
+                    "authorization_id": "authorization-private",
+                    "strategy_date": "2026-09-02",
+                    "state": "ARMED",
+                }
+            ],
+            "maximum_defined_loss": "500.00",
+            "maximum_contracts": 1,
+            "equity_kill_threshold": "99000.00",
+            "read_only_viewer": True,
+        },
+        "data_profile": {
+            "profile_id": "alpaca_basic_iex_indicative_v1",
+            "provider": "alpaca",
+            "plan": "basic",
+            "stock_feed": "iex",
+            "option_feed": "indicative",
+            "consolidated_stock_quotes": False,
+            "consolidated_option_quotes": False,
+            "limitations": ["Not consolidated OPRA."],
         },
         "limitations": ["Paper fills are simulated."],
         "report_digest": "a" * 64,
@@ -126,6 +281,8 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
         "attempt-private",
         "fill-private",
         "session-private",
+        "advisory-private",
+        "candidate-rejected-private",
     ):
         assert private_value not in serialized
     assert REDACTED in serialized
@@ -135,6 +292,26 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
     assert view["orders"]["chain_count"] == 1
     assert view["orders"]["fill_count"] == 4
     assert view["portfolio"]["observed_change"] == "70.00"
+    assert [item["symbol"] for item in view["candidate"]["history"]] == [
+        "SNOW",
+        "AVGO",
+    ]
+    assert view["candidate"]["history"][1]["failed_gates"] == ["IV_RATIO_LOW"]
+    assert view["candidate"]["scan_matrix"][0]["latest_result"] == "ELIGIBLE"
+    assert view["agent"]["reviews"][0]["decision"] == "ALLOW"
+    assert view["agent"]["advisories"][0]["kind"] == "READ_ONLY_ADVISORY"
+    assert view["agent"]["advisories"][0]["decision"] == (
+        "DETERMINISTIC_REJECTION_CONFIRMED"
+    )
+    assert view["agent"]["advisories"][0]["non_authorizing"] is True
+    assert view["agent"]["advisories"][0]["evidence"]
+    assert view["agent"]["advisories"][0]["tool_trace"][0]["kind"] == (
+        "read-only hash"
+    )
+    assert view["mcp"]["timeline"][0]["tool"] == "get_clock"
+    assert view["portfolio"]["equity_history"][0]["equity"] == 100070.0
+    assert view["safety"]["read_only_viewer"] is True
+    assert view["data_profile"]["option_feed"] == "indicative"
 
 
 def test_public_source_has_no_storage_or_operator_control_surface() -> None:
@@ -181,6 +358,10 @@ def test_public_source_has_no_storage_or_operator_control_surface() -> None:
     assert "Store(" not in source
     assert '@st.fragment(run_every="30s")' in source
     assert "Worker evidence is stale or missing" in source
+    assert "All-symbol scan matrix" in source
+    assert "Read-only rejected-candidate advisories" in source
+    assert "NON-CONSOLIDATED DATA PROFILE" in source
+    assert "no mutation callbacks" in source
 
 
 def test_build_revisions_are_strictly_bounded() -> None:

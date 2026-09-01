@@ -369,6 +369,33 @@ def test_invalid_narrow_wings_fall_back_to_next_symmetric_width() -> None:
     assert candidate.wing_width == D("5")
 
 
+def test_basic_profile_searches_outward_when_nearest_short_lacks_oi() -> None:
+    inputs = evaluation_inputs()
+    front = mutate_contract(
+        list(inputs["front_chain"]),  # type: ignore[arg-type]
+        OptionRight.PUT,
+        "95",
+        open_interest=None,
+        open_interest_date=None,
+    )
+    front.extend(
+        [
+            option("92.5", OptionRight.PUT, "0.80", "0.90", delta="-0.12"),
+            option("107.5", OptionRight.CALL, "0.55", "0.60", delta="0.12"),
+        ]
+    )
+    inputs["front_chain"] = front
+
+    candidate = evaluate_symbol(**inputs).candidate  # type: ignore[arg-type]
+
+    assert candidate is not None
+    assert candidate.short_put.snapshot.contract.strike == D("92.5")
+    assert candidate.short_call.snapshot.contract.strike == D("107.5")
+    assert candidate.long_put.snapshot.contract.strike == D("90")
+    assert candidate.long_call.snapshot.contract.strike == D("110")
+    assert candidate.maximum_loss <= D("500")
+
+
 def test_mixed_or_unknown_ppind_uses_conservative_non_penny_tick() -> None:
     inputs = evaluation_inputs()
     front = mutate_quote(
@@ -561,7 +588,10 @@ def test_asymmetric_or_too_wide_wings_do_not_form_condor() -> None:
     result = evaluate_symbol(
         **{**inputs, "front_chain": front}  # type: ignore[arg-type]
     )
-    assert result.failure_codes == (GateCode.SYMMETRIC_WINGS_MISSING,)
+    assert result.failure_codes == (
+        GateCode.SYMMETRIC_WINGS_MISSING,
+        GateCode.NO_VALID_CONDOR,
+    )
 
 
 def test_candidate_ranking_uses_every_tie_break_in_order() -> None:

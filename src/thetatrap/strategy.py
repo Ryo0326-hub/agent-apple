@@ -295,9 +295,11 @@ def evaluate_symbol(
         for snapshot in front
         if snapshot.contract.expiration == trade_expiration
     ]
-    short_put = _select_short_put(trade_chain, spot - expected_move)
-    short_call = _select_short_call(trade_chain, spot + expected_move)
-    if short_put is None or short_call is None:
+    put_threshold = spot - expected_move
+    call_threshold = spot + expected_move
+    short_puts = _short_put_candidates(trade_chain, put_threshold)
+    short_calls = _short_call_candidates(trade_chain, call_threshold)
+    if not short_puts or not short_calls:
         return _rejected(
             normalized_symbol,
             [
@@ -308,65 +310,70 @@ def evaluate_symbol(
             ],
         )
 
-    short_failures = _validate_trade_leg(
-        short_put, as_of, previous_trading_day, short=True, config=policy
-    )
-    short_failures.extend(
-        _validate_trade_leg(
-            short_call, as_of, previous_trading_day, short=True, config=policy
+    attempted_failures: list[GateFailure] = []
+    attempted_structures = 0
+    for short_put, short_call in _ordered_short_pairs(
+        short_puts,
+        short_calls,
+        put_threshold=put_threshold,
+        call_threshold=call_threshold,
+    ):
+        short_failures = _validate_trade_leg(
+            short_put, as_of, previous_trading_day, short=True, config=policy
         )
-    )
-    if short_failures:
-        short_failures.append(
-            GateFailure(GateCode.NO_VALID_CONDOR, "selected short legs are ineligible")
+        short_failures.extend(
+            _validate_trade_leg(
+                short_call, as_of, previous_trading_day, short=True, config=policy
+            )
         )
-        return _rejected(normalized_symbol, short_failures)
+        if short_failures:
+            attempted_failures.extend(short_failures)
+            continue
 
-    wing_sets = _symmetric_wing_sets(
-        trade_chain, short_put, short_call, policy.maximum_wing_width
-    )
-    if not wing_sets:
-        return _rejected(
-            normalized_symbol,
-            [
+        wing_sets = _symmetric_wing_sets(
+            trade_chain, short_put, short_call, policy.maximum_wing_width
+        )
+        if not wing_sets:
+            attempted_failures.append(
                 GateFailure(
                     GateCode.SYMMETRIC_WINGS_MISSING,
                     "no equal-width protective wings at or below maximum width",
                 )
-            ],
-        )
+            )
+            continue
 
-    attempted_failures: list[GateFailure] = []
-    for wing_width, long_put, long_call in wing_sets:
-        candidate, failures = _evaluate_structure(
-            symbol=normalized_symbol,
-            observed_at=as_of,
-            spot=spot,
-            front_atm=front_atm,
-            back_atm=back_atm,
-            expected_move=expected_move,
-            expected_move_fraction=expected_move_fraction,
-            front_iv=front_iv,
-            back_iv=back_iv,
-            iv_ratio=iv_ratio,
-            short_put=short_put,
-            short_call=short_call,
-            long_put=long_put,
-            long_call=long_call,
-            wing_width=wing_width,
-            previous_trading_day=previous_trading_day,
-            initial_equity=initial_equity,
-            buying_power=buying_power,
-            config=policy,
-        )
-        if candidate is not None:
-            return StrategyEvaluation(normalized_symbol, candidate)
-        attempted_failures.extend(failures)
+        for wing_width, long_put, long_call in wing_sets:
+            attempted_structures += 1
+            candidate, failures = _evaluate_structure(
+                symbol=normalized_symbol,
+                observed_at=as_of,
+                spot=spot,
+                front_atm=front_atm,
+                back_atm=back_atm,
+                expected_move=expected_move,
+                expected_move_fraction=expected_move_fraction,
+                front_iv=front_iv,
+                back_iv=back_iv,
+                iv_ratio=iv_ratio,
+                short_put=short_put,
+                short_call=short_call,
+                long_put=long_put,
+                long_call=long_call,
+                wing_width=wing_width,
+                previous_trading_day=previous_trading_day,
+                initial_equity=initial_equity,
+                buying_power=buying_power,
+                config=policy,
+            )
+            if candidate is not None:
+                return StrategyEvaluation(normalized_symbol, candidate)
+            attempted_failures.extend(failures)
 
     attempted_failures.append(
         GateFailure(
             GateCode.NO_VALID_CONDOR,
-            f"none of {len(wing_sets)} symmetric wing widths passed",
+            "no liquid short pair and symmetric wing set passed "
+            f"across {attempted_structures} priced structures",
         )
     )
     return _rejected(normalized_symbol, attempted_failures)
@@ -730,41 +737,69 @@ def _validate_trade_leg(
     return failures
 
 
-def _select_short_put(
+def _short_put_candidates(
     chain: Sequence[OptionSnapshot], threshold: Decimal
-) -> OptionSnapshot | None:
-    eligible = [
-        snapshot
-        for snapshot in chain
-        if snapshot.contract.right is OptionRight.PUT
-        and snapshot.contract.strike <= threshold
-    ]
-    return (
-        min(
-            eligible,
-            key=lambda snapshot: (-snapshot.contract.strike, snapshot.contract.symbol),
-        )
-        if eligible
-        else None
+) -> list[OptionSnapshot]:
+    return sorted(
+        [
+            snapshot
+            for snapshot in chain
+            if snapshot.contract.right is OptionRight.PUT
+            and snapshot.contract.strike <= threshold
+        ],
+        key=lambda snapshot: (-snapshot.contract.strike, snapshot.contract.symbol),
     )
 
 
-def _select_short_call(
+def _short_call_candidates(
     chain: Sequence[OptionSnapshot], threshold: Decimal
-) -> OptionSnapshot | None:
-    eligible = [
-        snapshot
-        for snapshot in chain
-        if snapshot.contract.right is OptionRight.CALL
-        and snapshot.contract.strike >= threshold
-    ]
-    return (
-        min(
-            eligible,
-            key=lambda snapshot: (snapshot.contract.strike, snapshot.contract.symbol),
-        )
-        if eligible
-        else None
+) -> list[OptionSnapshot]:
+    return sorted(
+        [
+            snapshot
+            for snapshot in chain
+            if snapshot.contract.right is OptionRight.CALL
+            and snapshot.contract.strike >= threshold
+        ],
+        key=lambda snapshot: (snapshot.contract.strike, snapshot.contract.symbol),
+    )
+
+
+def _ordered_short_pairs(
+    puts: Sequence[OptionSnapshot],
+    calls: Sequence[OptionSnapshot],
+    *,
+    put_threshold: Decimal,
+    call_threshold: Decimal,
+) -> list[tuple[OptionSnapshot, OptionSnapshot]]:
+    """Search nearest short strikes first while permitting Basic-data fallback.
+
+    Alpaca Basic can omit current open interest or publish an unusable spread for
+    one strike while adjacent listed contracts remain valid.  The deterministic
+    search therefore advances outward instead of treating the first listed
+    strike as the only possible structure.  Hard leg, credit, and risk gates are
+    unchanged and every candidate remains outside the expected move.
+    """
+
+    pairs = [(put, call) for put in puts for call in calls]
+    return sorted(
+        pairs,
+        key=lambda pair: (
+            max(
+                put_threshold - pair[0].contract.strike,
+                pair[1].contract.strike - call_threshold,
+            ),
+            abs(
+                (put_threshold - pair[0].contract.strike)
+                - (pair[1].contract.strike - call_threshold)
+            ),
+            (put_threshold - pair[0].contract.strike)
+            + (pair[1].contract.strike - call_threshold),
+            -pair[0].contract.strike,
+            pair[1].contract.strike,
+            pair[0].contract.symbol,
+            pair[1].contract.symbol,
+        ),
     )
 
 

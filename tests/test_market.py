@@ -119,6 +119,9 @@ async def test_collection_uses_exact_basic_feeds_and_joins_metadata() -> None:
     assert len(result.front_chain) == 2
     assert len(result.back_chain) == 2
     assert result.diagnostics["option_feed"] == "indicative"
+    assert result.diagnostics["market_data_profile"]["profile_id"] == (
+        "alpaca_basic_iex_indicative_v1"
+    )
     assert result.diagnostics["contract_count"] == 4
     assert any(
         name == "get_stock_latest_quote" and args["feed"] == "iex"
@@ -137,3 +140,29 @@ async def test_collection_uses_exact_basic_feeds_and_joins_metadata() -> None:
     ]
     assert contract_calls[0]["show_deliverables"] is True
     assert contract_calls[1]["page_token"] == "next"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stock_feed", "option_feed", "message"),
+    [
+        ("sip", "indicative", "ALPACA_STOCK_FEED"),
+        ("iex", "opra", "ALPACA_OPTION_FEED"),
+    ],
+)
+async def test_collection_rejects_unapproved_feed_before_any_mcp_read(
+    stock_feed: str, option_feed: str, message: str
+) -> None:
+    connection = FakeConnection()
+
+    with pytest.raises(ValueError, match=message):
+        await collect_symbol_market(
+            connection,
+            symbol="TEST",
+            trade_expiration=date(2026, 9, 4),
+            term_expiration=date(2026, 9, 11),
+            stock_feed=stock_feed,
+            option_feed=option_feed,
+        )
+
+    assert connection.calls == []

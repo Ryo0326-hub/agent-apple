@@ -347,3 +347,37 @@ def test_decision_rehearsal_cli_parses_strategy_date_and_reports_safety(
     assert payload["outcome"] == "QWEN_DECISION_RECORDED"
     assert payload["safety_status"] == "PASS"
     assert payload["broker_safety"]["mutation_dispatch_attempts"] == 0
+
+
+def test_advisory_review_cli_parses_date_and_reports_non_authorizing_trace(
+    monkeypatch: pytest.MonkeyPatch,
+    valid_env_file: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fake_advisory(settings: Any, strategy_date: date) -> dict[str, Any]:
+        assert settings.alpaca_paper_trade is True
+        assert strategy_date == date(2026, 9, 1)
+        return {
+            "outcome": "QWEN_ADVISORY_RECORDED",
+            "mode": "READ_ONLY_REJECTED_CANDIDATE_ADVISORY",
+            "mutation_tools_exposed": 0,
+            "mutation_dispatches": 0,
+        }
+
+    monkeypatch.setattr(cli, "run_persisted_advisory_review", fake_advisory)
+    result = cli.main(
+        [
+            "--env-file",
+            str(valid_env_file),
+            "advisory-review",
+            "--strategy-date",
+            "2026-09-01",
+        ]
+    )
+
+    assert result == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ok"
+    assert payload["outcome"] == "QWEN_ADVISORY_RECORDED"
+    assert payload["mutation_tools_exposed"] == 0
+    assert payload["mutation_dispatches"] == 0

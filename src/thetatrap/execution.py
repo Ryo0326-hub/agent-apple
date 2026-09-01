@@ -16,6 +16,11 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from thetatrap.data_profile import (
+    BASIC_OPTION_FEED,
+    BASIC_STOCK_FEED,
+    require_basic_indicative_profile,
+)
 from thetatrap.errors import ExecutionError, PolicyError
 from thetatrap.mcp.client import MCPConnection, extract_account, unwrap_data
 from thetatrap.policy import (
@@ -902,15 +907,24 @@ async def quote_atomic_exit(
     *,
     now: datetime | None = None,
     maximum_age_seconds: int = 60,
+    option_feed: str = BASIC_OPTION_FEED,
 ) -> ExitQuote:
     """Price the exact opposite four-leg close from indicative MCP snapshots."""
 
     validate_mleg_arguments(entry_arguments, action="entry")
+    profile = require_basic_indicative_profile(
+        stock_feed=BASIC_STOCK_FEED,
+        option_feed=option_feed,
+    )
     observed_at = (now or datetime.now(UTC)).astimezone(UTC)
     symbols = [str(leg["symbol"]) for leg in entry_arguments["legs"]]
     wrapper = await connection.call_system_read(
         "get_option_snapshot",
-        {"symbols": ",".join(symbols), "feed": "indicative", "limit": 100},
+        {
+            "symbols": ",".join(symbols),
+            "feed": profile.option_feed,
+            "limit": 100,
+        },
     )
     data = unwrap_data(wrapper)
     snapshots = data.get("snapshots") if isinstance(data, dict) else None

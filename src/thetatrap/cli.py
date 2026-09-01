@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from thetatrap.advisory import run_persisted_advisory_review
 from thetatrap.errors import ThetaTrapError
 from thetatrap.events import load_events
 from thetatrap.log import configure_logging
@@ -71,6 +72,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="run live deterministic screening and bounded Qwen review without mutation",
     )
     rehearsal.add_argument("--strategy-date", required=True)
+    advisory = subparsers.add_parser(
+        "advisory-review",
+        help="run one read-only Qwen advisory for an existing rejected strategy run",
+    )
+    advisory.add_argument("--strategy-date", required=True)
     subparsers.add_parser("mcp-smoke", help="run one credentialed read-only MCP cycle")
     subparsers.add_parser(
         "preflight",
@@ -177,6 +183,15 @@ def main(argv: list[str] | None = None) -> int:
             strategy_day = _optional_strategy_date(args.strategy_date)
             assert strategy_day is not None
             report = asyncio.run(run_decision_rehearsal(settings, strategy_day))
+            _print_json({"status": "ok", **report})
+            return 0
+
+        if args.command == "advisory-review":
+            strategy_day = _optional_strategy_date(args.strategy_date)
+            assert strategy_day is not None
+            report = asyncio.run(
+                run_persisted_advisory_review(settings, strategy_day)
+            )
             _print_json({"status": "ok", **report})
             return 0
 
@@ -327,6 +342,7 @@ async def _preflight(settings: Any) -> dict[str, Any]:
                 latest_authorization,
                 now=datetime.now(UTC),
             ),
+            "market_data_profile": settings.market_data_status(),
             "required_schema_hash": connection.registry.required_schema_hash,
             "mcp_tool_count": connection.registry.tool_count,
         }

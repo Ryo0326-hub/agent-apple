@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from thetatrap.dashboard import CLEAR_CONFIRMATION, update_kill_switch
+from thetatrap.events import load_events
 from thetatrap.report import (
     ReportUnavailable,
     build_operational_report,
@@ -22,6 +23,7 @@ NOW = datetime(2026, 9, 1, 18, 50, tzinfo=UTC)
 def populated_store(tmp_path: Path) -> Store:
     store = Store(tmp_path / "runtime.sqlite3")
     store.initialize()
+    store.upsert_events(load_events())
     store.bind_identity("development", "account-123456789", "account-123456789")
     store.record_heartbeat(
         status="healthy",
@@ -101,6 +103,74 @@ def populated_store(tmp_path: Path) -> Store:
         passed=True,
         detail={"value": "430.00"},
         evaluated_at=NOW + timedelta(seconds=1),
+    )
+
+    store.record_collection_snapshot(
+        "snapshot-2",
+        run_id="run-1",
+        symbol="MDB",
+        collection_type="strategy_market_bundle",
+        observed_at=NOW + timedelta(seconds=2),
+        payload={"feed": "indicative"},
+    )
+    store.record_candidate(
+        "candidate-2",
+        run_id="run-1",
+        snapshot_id="snapshot-2",
+        symbol="MDB",
+        candidate_rank=None,
+        eligible=False,
+        payload={
+            "symbol": "MDB",
+            "candidate": None,
+            "failures": [
+                {
+                    "code": "IV_RATIO_LOW",
+                    "detail": "front/back ATM IV ratio 1.02 is below 1.10",
+                }
+            ],
+        },
+    )
+    store.record_gate_result(
+        "candidate-2",
+        "screen-mdb-1",
+        "IV_RATIO_LOW",
+        passed=False,
+        reason_code="IV_RATIO_LOW",
+        detail={"value": "1.02", "minimum": "1.10"},
+        evaluated_at=NOW + timedelta(seconds=2),
+    )
+
+    store.start_advisory_run(
+        "advisory-1",
+        run_id="run-1",
+        candidate_id="candidate-2",
+        model="Qwen/Qwen3-Coder-Next",
+        prompt_hash="a" * 64,
+        config_hash="b" * 64,
+        started_at=NOW + timedelta(seconds=3),
+    )
+    store.record_advisory_tool_call(
+        "advisory-1",
+        0,
+        turn=1,
+        tool_name="get_clock",
+        arguments_hash="c" * 64,
+        result_hash="d" * 64,
+        status="ok",
+        duration_ms=9,
+        called_at=NOW + timedelta(seconds=3),
+    )
+    store.finish_advisory_run(
+        "advisory-1",
+        "COMPLETED",
+        result={
+            "assessment": "DETERMINISTIC_REJECTION_CONFIRMED",
+            "summary": "The IV-ratio gate remains binding.",
+            "evidence": ["Observed ratio 1.02 is below frozen minimum 1.10."],
+            "non_authorizing": True,
+        },
+        ended_at=NOW + timedelta(seconds=4),
     )
     store.record_gate_result(
         "candidate-1",
@@ -240,7 +310,9 @@ def test_report_reconciles_strategy_agent_orders_positions_and_equity(tmp_path: 
     )
 
     assert report["mode"]["banner"] == "PAPER · TRADING DISARMED"
+    assert report["report_schema_version"] == "2"
     assert report["mode"]["data_feed"] == "BASIC INDICATIVE"
+    assert report["data_profile"]["profile_id"] == "alpaca_basic_iex_indicative_v1"
     assert report["identity"]["account_suffix"] == "…456789"
     assert report["mcp"]["latest_session"]["status"] == "closed"
     assert report["mcp"]["operational_status"] == "ready"
@@ -249,6 +321,19 @@ def test_report_reconciles_strategy_agent_orders_positions_and_equity(tmp_path: 
     assert [
         gate["gate_name"] for gate in report["candidate"]["latest_gate_outcomes"]
     ] == ["MAX_LOSS", "QUOTE_FRESHNESS"]
+    assert {item["symbol"] for item in report["candidate"]["history"]} == {
+        "PANW",
+        "MDB",
+    }
+    rejected = next(
+        item for item in report["candidate"]["history"] if item["symbol"] == "MDB"
+    )
+    assert rejected["failed_gate_names"] == ["IV_RATIO_LOW"]
+    assert len(report["candidate"]["scan_matrix"]) == 9
+    matrix = {item["symbol"]: item for item in report["candidate"]["scan_matrix"]}
+    assert matrix["PANW"]["latest_result"] == "ELIGIBLE"
+    assert matrix["MDB"]["latest_result"] == "REJECTED"
+    assert matrix["DELL"]["latest_result"] == "EXCLUDED"
     assert report["agent"]["latest_run"]["result"]["decision"] == "ALLOW"
     assert report["agent"]["tool_trace"][0]["is_official_mcp"] is True
     assert report["agent"]["tool_trace"][0]["result_summary"] == {
@@ -256,11 +341,24 @@ def test_report_reconciles_strategy_agent_orders_positions_and_equity(tmp_path: 
         "keys": ["data"],
         "key_count": 1,
     }
+    assert len(report["agent"]["reviews"]) == 1
+    assert report["agent"]["reviews"][0]["symbol"] == "PANW"
+    assert report["agent"]["advisories"][0]["mode"] == (
+        "READ_ONLY_REJECTED_CANDIDATE_ADVISORY"
+    )
+    assert report["agent"]["advisories"][0]["symbol"] == "MDB"
+    assert report["agent"]["advisories"][0]["tool_trace"][0]["tool_name"] == (
+        "get_clock"
+    )
+    assert report["mcp"]["timeline"][0]["tool_name"] == "get_clock"
+    assert report["strategy"]["transition_history"]
     assert report["orders"]["chains"][0]["state"] == "FILLED"
     assert report["orders"]["fill_count"] == 4
     assert report["orders"]["option_cash_flow_ex_fees"] == "70.00"
     assert report["portfolio"]["latest_position_observation"]["is_flat"] is False
     assert report["portfolio"]["equity"]["observed_change"] == "75.00"
+    assert report["safety"]["maximum_defined_loss"] == "500.00"
+    assert report["safety"]["read_only_viewer"] is True
 
     serialized = json.dumps(report)
     assert "must-not-appear" not in serialized

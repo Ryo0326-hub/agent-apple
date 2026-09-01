@@ -33,7 +33,7 @@ def test_runtime_schema_and_strategy_transitions_are_idempotent(tmp_path: Path) 
     store = make_store(tmp_path)
     store.initialize()
     assert store.get_metadata("schema_version") == "2"
-    assert store.get_metadata("runtime_schema_version") == "4"
+    assert store.get_metadata("runtime_schema_version") == "5"
 
     first = store.create_strategy_run(
         "run-1",

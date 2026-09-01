@@ -9,6 +9,11 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
+from thetatrap.data_profile import (
+    BASIC_OPTION_FEED,
+    BASIC_STOCK_FEED,
+    require_basic_indicative_profile,
+)
 from thetatrap.domain import OptionSnapshot, UnderlyingQuote
 from thetatrap.errors import MCPToolError
 from thetatrap.mcp.client import unwrap_data
@@ -45,10 +50,16 @@ async def collect_symbol_market(
     trade_expiration: date,
     term_expiration: date,
     now: datetime | None = None,
+    stock_feed: str = BASIC_STOCK_FEED,
+    option_feed: str = BASIC_OPTION_FEED,
 ) -> MarketCollection:
     normalized_symbol = symbol.strip().upper()
     if not normalized_symbol:
         raise ValueError("market collection requires a symbol")
+    profile = require_basic_indicative_profile(
+        stock_feed=stock_feed,
+        option_feed=option_feed,
+    )
 
     contract_payloads = await _fetch_contracts(
         connection,
@@ -57,10 +68,10 @@ async def collect_symbol_market(
         term_expiration,
     )
     front_snapshots = await _fetch_chain(
-        connection, normalized_symbol, trade_expiration
+        connection, normalized_symbol, trade_expiration, profile.option_feed
     )
     back_snapshots = await _fetch_chain(
-        connection, normalized_symbol, term_expiration
+        connection, normalized_symbol, term_expiration, profile.option_feed
     )
     calendar_reference = (now or datetime.now(UTC)).astimezone(UTC)
     previous_day = await previous_trading_day(
@@ -69,7 +80,8 @@ async def collect_symbol_market(
     # Fetch the short-lived underlying quote last.  Strategy policy allows only
     # ten seconds of age, while the option snapshots have a sixty-second bound.
     stock_wrapper = await connection.call_system_read(
-        "get_stock_latest_quote", {"symbols": normalized_symbol, "feed": "iex"}
+        "get_stock_latest_quote",
+        {"symbols": normalized_symbol, "feed": profile.stock_feed},
     )
     observed_at = (now or datetime.now(UTC)).astimezone(UTC)
 
@@ -125,8 +137,9 @@ async def collect_symbol_market(
             "back_joined_count": len(back),
             "missing_front_metadata": missing_front,
             "missing_back_metadata": missing_back,
-            "stock_feed": "iex",
-            "option_feed": "indicative",
+            "market_data_profile": profile.status(),
+            "stock_feed": profile.stock_feed,
+            "option_feed": profile.option_feed,
         },
     )
 
@@ -189,12 +202,15 @@ async def _fetch_contracts(
 
 
 async def _fetch_chain(
-    connection: SystemReadConnection, symbol: str, expiration: date
+    connection: SystemReadConnection,
+    symbol: str,
+    expiration: date,
+    option_feed: str,
 ) -> dict[str, dict[str, Any]]:
     arguments: dict[str, Any] = {
         "underlying_symbol": symbol,
         "expiration_date": expiration.isoformat(),
-        "feed": "indicative",
+        "feed": option_feed,
         "limit": 1000,
     }
     snapshots: dict[str, dict[str, Any]] = {}

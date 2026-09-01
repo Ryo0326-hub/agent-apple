@@ -61,6 +61,7 @@ async def run_read_cycle(
         "open_order_count": _collection_size(orders),
         "position_count": _collection_size(positions),
         "options_level": _options_level(account, account_config),
+        "market_data_profile": settings.market_data_status(),
         "required_schema_hash": connection.registry.required_schema_hash,
         "mcp_tool_count": connection.registry.tool_count,
     }
@@ -98,6 +99,7 @@ async def run_account_discovery(settings: RuntimeSettings) -> dict[str, Any]:
         return {
             "environment": settings.environment,
             "paper_mode": settings.alpaca_paper_trade,
+            "market_data_profile": settings.market_data_status(),
             "account_id": account_id,
             "account_suffix": account_suffix(account_id),
             "env_assignment": f"THETATRAP_EXPECTED_ACCOUNT_ID={account_id}",
@@ -172,6 +174,7 @@ async def run_agent_smoke(settings: RuntimeSettings) -> dict[str, Any]:
                 "readiness": decision.readiness,
                 "reasons": list(decision.reasons),
                 "mutation_tools_exposed": 0,
+                "market_data_profile": settings.market_data_status(),
                 "required_schema_hash": connection.registry.required_schema_hash,
                 "mcp_tool_count": connection.registry.tool_count,
             }
@@ -184,6 +187,7 @@ async def run_agent_smoke(settings: RuntimeSettings) -> dict[str, Any]:
                 result={
                     "outcome": "FAIL",
                     "account_suffix": account_suffix(account_id),
+                    "market_data_profile": settings.market_data_status(),
                     "completed_reads": [
                         call.name for call in tools.calls if call.status == "ok"
                     ],
@@ -219,7 +223,10 @@ async def run_worker(settings: RuntimeSettings, *, once: bool = False) -> dict[s
                 account_suffix=None,
                 mcp_schema_hash=None,
                 market_is_open=None,
-                detail={"error_type": type(exc).__name__},
+                detail={
+                    "error_type": type(exc).__name__,
+                    "market_data_profile": settings.market_data_status(),
+                },
             )
             LOGGER.exception("MCP worker cycle failed")
             if once:

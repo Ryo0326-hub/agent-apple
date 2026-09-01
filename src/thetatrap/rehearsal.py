@@ -125,8 +125,13 @@ async def run_decision_rehearsal(
                 raise PolicyError("decision rehearsal did not create its ephemeral run")
             candidates = store.list_candidates(run["run_id"])
             agent_runs = _agent_runs(store, run["run_id"])
+            advisory_run = store.advisory_run_for_strategy(run["run_id"])
             tool_trace = _bounded_trace(store, agent_runs)
-            decision_status = _decision_status(agent_runs, tool_trace)
+            if advisory_run is not None:
+                tool_trace.extend(_bounded_advisory_trace(store, advisory_run))
+            decision_status = _decision_status(
+                agent_runs, tool_trace, advisory_run=advisory_run
+            )
             order_attempt_count = _order_attempt_count(store, run["run_id"])
             if order_attempt_count != 0:
                 raise PolicyError("decision rehearsal persisted a broker order attempt")
@@ -142,6 +147,7 @@ async def run_decision_rehearsal(
                 "market_is_open": before.market_is_open,
                 "paper_mode": settings.alpaca_paper_trade,
                 "execution_enabled": False,
+                "market_data_profile": settings.market_data_status(),
                 "ephemeral_database": True,
                 "production_database_touched": False,
                 "strategy_result": result,
@@ -152,6 +158,11 @@ async def run_decision_rehearsal(
                     _candidate_summary(store, candidate) for candidate in candidates
                 ],
                 "qwen_reviews": [_agent_summary(item) for item in agent_runs],
+                "qwen_advisory": (
+                    _advisory_summary(advisory_run)
+                    if advisory_run is not None
+                    else None
+                ),
                 "bounded_tool_trace": tool_trace,
                 "broker_safety": {
                     "mutation_dispatch_attempts": connection.mutation_attempts,
@@ -267,9 +278,57 @@ def _bounded_trace(
     return trace
 
 
+def _bounded_advisory_trace(
+    store: Store, advisory_run: dict[str, Any]
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "sequence": call["sequence"],
+            "turn": call["turn"],
+            "scope": "READ_ONLY_REJECTED_CANDIDATE_ADVISORY",
+            "tool_name": call["tool_name"],
+            "tool_kind": "official_mcp_read",
+            "status": call["status"],
+            "duration_ms": call["duration_ms"],
+            "arguments_hash": call["arguments_hash"],
+            "result_hash": call["result_hash"],
+            "read_dispatched": call["status"] == "ok",
+            "mutation_dispatched": False,
+        }
+        for call in store.list_advisory_tool_calls(advisory_run["advisory_run_id"])
+    ]
+
+
+def _advisory_summary(advisory_run: dict[str, Any]) -> dict[str, Any]:
+    result = advisory_run.get("result") or {}
+    return {
+        "mode": advisory_run["mode"],
+        "status": advisory_run["status"],
+        "non_authorizing": True,
+        "deterministic_rejection_final": True,
+        "symbol": result.get("symbol"),
+        "assessment": result.get("assessment"),
+        "summary": result.get("summary"),
+        "evidence": result.get("evidence") or [],
+        "model": result.get("model") or advisory_run.get("model"),
+        "turns": result.get("turns"),
+        "tool_calls": result.get("tool_calls"),
+        "error_type": advisory_run.get("error_type"),
+    }
+
+
 def _decision_status(
-    agent_runs: list[dict[str, Any]], tool_trace: list[dict[str, Any]]
+    agent_runs: list[dict[str, Any]],
+    tool_trace: list[dict[str, Any]],
+    *,
+    advisory_run: dict[str, Any] | None = None,
 ) -> str:
+    if advisory_run is not None:
+        return (
+            "QWEN_ADVISORY_RECORDED"
+            if advisory_run.get("status") == "COMPLETED" and tool_trace
+            else "QWEN_ADVISORY_FAILED"
+        )
     if not agent_runs:
         return "NO_ELIGIBLE_CANDIDATE"
     terminal_decisions = [

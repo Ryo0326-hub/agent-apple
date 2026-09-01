@@ -124,7 +124,15 @@ THETATRAP_ENVIRONMENT=competition
 THETATRAP_READ_ONLY=true
 THETATRAP_EXECUTION_ENABLED=false
 ALPACA_PAPER_TRADE=true
+ALPACA_STOCK_FEED=iex
+ALPACA_OPTION_FEED=indicative
 ```
+
+The final two values identify the reviewed, fail-closed Alpaca Basic profile.
+Any other feed value stops configuration load. Verify the profile ID
+`alpaca_basic_iex_indicative_v1` in both `check-config` and `preflight`; see
+[COMPETITION_DATA_PROFILE.md](COMPETITION_DATA_PROFILE.md) for the persisted
+status fields and limitations.
 
 Do not put `THETATRAP_BUILD_SHA` or `THETATRAP_PUBLIC_HOST` in this application
 role file; export them in the deployment shell. Never print `docker compose

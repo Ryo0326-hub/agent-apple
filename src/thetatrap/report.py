@@ -17,11 +17,12 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
+from thetatrap.data_profile import ALPACA_BASIC_INDICATIVE
 from thetatrap.security import redact
 from thetatrap.settings import account_suffix
 
 
-REPORT_SCHEMA_VERSION = "1"
+REPORT_SCHEMA_VERSION = "2"
 REPORT_DATA_FEED = "BASIC INDICATIVE"
 MAX_RECENT_ROWS = 100
 
@@ -66,14 +67,17 @@ def build_operational_report(
         focus_run = current_run or last_run
         focus_run_id = str(focus_run["run_id"]) if focus_run else None
         transitions = _strategy_transitions(connection, tables, focus_run_id)
+        transition_history = _all_strategy_transitions(connection, tables)
         candidates, selected_candidate, latest_gates = _candidate_summary(
             connection, tables, focus_run_id
         )
         candidate_history = _all_candidates(connection, tables)
+        scan_matrix = _scan_matrix(connection, tables, candidate_history)
         agent = _agent_summary(connection, tables, focus_run_id)
         orders = _order_summary(connection, tables, focus_run_id)
         portfolio = _portfolio_summary(connection, tables, focus_run_id)
         kill_switch = _kill_switch_summary(connection, tables)
+        entry_permission_history = _entry_permission_history(connection, tables)
 
         resolved_environment = (
             environment
@@ -137,6 +141,7 @@ def build_operational_report(
                 "last_run": last_run,
                 "focus_run_id": focus_run_id,
                 "transitions": transitions,
+                "transition_history": transition_history,
                 "no_trade_reason": no_trade_reason,
                 "run_history": runs,
             },
@@ -145,15 +150,26 @@ def build_operational_report(
                 "latest_gate_outcomes": latest_gates,
                 "all_for_focus_run": candidates,
                 "history": candidate_history,
+                "scan_matrix": scan_matrix,
             },
             "agent": agent,
             "orders": orders,
             "portfolio": portfolio,
+            "safety": {
+                "kill_switch": kill_switch,
+                "entry_permissions": entry_permission_history,
+                "paper_only": True,
+                "read_only_viewer": True,
+                "maximum_defined_loss": "500.00",
+                "maximum_contracts": 1,
+                "equity_kill_threshold": "99000.00",
+            },
             "source_labels": {
                 "quotes": "Alpaca Basic indicative options data",
                 "execution": "Alpaca paper trading (simulated fills)",
                 "agent": "Featherless-hosted open-source Qwen orchestration",
             },
+            "data_profile": ALPACA_BASIC_INDICATIVE.status(),
             "limitations": [
                 "Indicative option quotes are not consolidated live OPRA quotes.",
                 "Paper fills are simulated and do not establish live profitability.",
@@ -440,9 +456,8 @@ def _mcp_summary(
         rows = connection.execute(
             """
             SELECT called_at, principal, tool_name, status, duration_ms
-            FROM mcp_calls ORDER BY id DESC LIMIT ?
-            """,
-            (MAX_RECENT_ROWS,),
+            FROM mcp_calls ORDER BY id DESC
+            """
         ).fetchall()
         calls = [dict(row) for row in rows]
     last_successful_call = next(
@@ -458,7 +473,8 @@ def _mcp_summary(
     return {
         "latest_session": session,
         "operational_status": operational_status,
-        "recent_calls": calls,
+        "recent_calls": calls[:MAX_RECENT_ROWS],
+        "timeline": list(reversed(calls)),
         "last_successful_call": last_successful_call,
     }
 
@@ -483,6 +499,22 @@ def _strategy_transitions(
     rows = connection.execute(
         "SELECT * FROM strategy_transitions WHERE run_id=? ORDER BY id",
         (run_id,),
+    ).fetchall()
+    return [_decode_fields(row, "evidence_json") for row in rows]
+
+
+def _all_strategy_transitions(
+    connection: sqlite3.Connection, tables: set[str]
+) -> list[dict[str, Any]]:
+    if "strategy_transitions" not in tables or "strategy_runs" not in tables:
+        return []
+    rows = connection.execute(
+        """
+        SELECT transition.*, run.strategy_date, run.environment
+        FROM strategy_transitions AS transition
+        JOIN strategy_runs AS run ON run.run_id=transition.run_id
+        ORDER BY transition.transitioned_at, transition.id
+        """
     ).fetchall()
     return [_decode_fields(row, "evidence_json") for row in rows]
 
@@ -537,18 +569,128 @@ def _all_candidates(
         return []
     rows = connection.execute(
         """
-        SELECT * FROM candidates
-        ORDER BY created_at DESC, run_id, candidate_rank IS NULL, candidate_rank
-        LIMIT ?
-        """,
-        (MAX_RECENT_ROWS,),
+        SELECT candidate.*, run.strategy_date, run.state AS run_state,
+               snapshot.observed_at AS scanned_at,
+               snapshot.collection_type AS collection_type
+        FROM candidates AS candidate
+        JOIN strategy_runs AS run ON run.run_id=candidate.run_id
+        LEFT JOIN collection_snapshots AS snapshot
+          ON snapshot.snapshot_id=candidate.snapshot_id
+        ORDER BY COALESCE(snapshot.observed_at, candidate.created_at) DESC,
+                 candidate.created_at DESC,
+                 candidate.candidate_rank IS NULL,
+                 candidate.candidate_rank,
+                 candidate.symbol
+        """
     ).fetchall()
+    gates_by_candidate: dict[str, list[dict[str, Any]]] = {}
+    if "candidate_gate_results" in tables:
+        gate_rows = connection.execute(
+            """
+            SELECT * FROM candidate_gate_results
+            ORDER BY evaluated_at, id
+            """
+        ).fetchall()
+        for gate_row in gate_rows:
+            gate = _decode_fields(gate_row, "detail_json")
+            gate["passed"] = bool(gate["passed"])
+            gates_by_candidate.setdefault(str(gate["candidate_id"]), []).append(gate)
+
     candidates: list[dict[str, Any]] = []
     for row in rows:
         candidate = _decode_fields(row, "payload_json")
         candidate["eligible"] = bool(candidate["eligible"])
+        gates = gates_by_candidate.get(str(candidate["candidate_id"]), [])
+        evaluations: list[dict[str, Any]] = []
+        by_evaluation: dict[str, list[dict[str, Any]]] = {}
+        for gate in gates:
+            by_evaluation.setdefault(str(gate["evaluation_id"]), []).append(gate)
+        for evaluation_id, evaluation_gates in by_evaluation.items():
+            evaluations.append(
+                {
+                    "evaluation_id": evaluation_id,
+                    "evaluated_at": evaluation_gates[-1].get("evaluated_at"),
+                    "passed": all(bool(gate.get("passed")) for gate in evaluation_gates),
+                    "gates": evaluation_gates,
+                }
+            )
+        candidate["gate_evaluations"] = evaluations
+        candidate["gates"] = gates
+        candidate["failed_gate_names"] = sorted(
+            {
+                str(gate.get("reason_code") or gate.get("gate_name"))
+                for gate in gates
+                if not gate.get("passed")
+            }
+        )
         candidates.append(candidate)
     return candidates
+
+
+def _scan_matrix(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    candidate_history: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if "event_definitions" not in tables:
+        return []
+    events = [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT symbol, strategy_version, event_date, release_timing,
+                   conference_call_at, status, exclusion_reason,
+                   trade_expiration, term_expiration
+            FROM event_definitions
+            ORDER BY event_date, symbol
+            """
+        ).fetchall()
+    ]
+    collection_counts: dict[str, int] = {}
+    if "collection_snapshots" in tables:
+        collection_counts = {
+            str(row["symbol"]): int(row["collection_count"])
+            for row in connection.execute(
+                """
+                SELECT symbol, COUNT(*) AS collection_count
+                FROM collection_snapshots GROUP BY symbol
+                """
+            ).fetchall()
+        }
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for candidate in candidate_history:
+        by_symbol.setdefault(str(candidate.get("symbol") or ""), []).append(candidate)
+
+    matrix: list[dict[str, Any]] = []
+    for event in events:
+        symbol = str(event["symbol"])
+        history = by_symbol.get(symbol, [])
+        latest = history[0] if history else {}
+        configured_status = str(event.get("status") or "unknown").upper()
+        if configured_status != "VERIFIED":
+            latest_result = "EXCLUDED"
+        elif latest:
+            latest_result = "ELIGIBLE" if latest.get("eligible") else "REJECTED"
+        elif collection_counts.get(symbol, 0):
+            latest_result = "COLLECTED"
+        else:
+            latest_result = "NOT_SCANNED"
+        matrix.append(
+            {
+                **event,
+                "configured_status": configured_status,
+                "collection_count": collection_counts.get(symbol, 0),
+                "evaluation_count": len(history),
+                "eligible_count": sum(
+                    1 for item in history if bool(item.get("eligible"))
+                ),
+                "latest_result": latest_result,
+                "latest_scanned_at": latest.get("scanned_at") or latest.get("created_at"),
+                "latest_failed_gates": latest.get("failed_gate_names", []),
+                "latest_payload": latest.get("payload"),
+            }
+        )
+    return matrix
 
 
 def _agent_summary(
@@ -560,23 +702,39 @@ def _agent_summary(
             "tool_trace": [],
             "last_successful_call": None,
             "run_history": [],
+            "reviews": [],
+            "advisories": _advisory_summary(connection, tables),
         }
     history = [
         _decode_fields(item, "result_json")
         for item in connection.execute(
             """
-            SELECT * FROM agent_runs
-            ORDER BY COALESCE(ended_at, started_at) DESC, started_at DESC LIMIT ?
-            """,
-            (MAX_RECENT_ROWS,),
+            SELECT agent.*, candidate.symbol, candidate.candidate_rank,
+                   run.strategy_date
+            FROM agent_runs AS agent
+            LEFT JOIN candidates AS candidate
+              ON candidate.candidate_id=agent.candidate_id
+            LEFT JOIN strategy_runs AS run ON run.run_id=agent.run_id
+            ORDER BY COALESCE(agent.ended_at, agent.started_at) DESC,
+                     agent.started_at DESC
+            """
         ).fetchall()
     ]
+    reviews: list[dict[str, Any]] = []
+    for item in history:
+        review = dict(item)
+        review["tool_trace"] = _agent_tool_trace(
+            connection, tables, str(item["agent_run_id"])
+        )
+        reviews.append(review)
     if not run_id:
         return {
             "latest_run": None,
             "tool_trace": [],
             "last_successful_call": None,
             "run_history": history,
+            "reviews": reviews,
+            "advisories": _advisory_summary(connection, tables),
         }
     row = connection.execute(
         """
@@ -591,22 +749,11 @@ def _agent_summary(
             "tool_trace": [],
             "last_successful_call": None,
             "run_history": history,
+            "reviews": reviews,
+            "advisories": _advisory_summary(connection, tables),
         }
     latest = _decode_fields(row, "result_json")
-    trace: list[dict[str, Any]] = []
-    if "agent_tool_trace" in tables:
-        trace_rows = connection.execute(
-            """
-            SELECT * FROM agent_tool_trace
-            WHERE agent_run_id=? ORDER BY sequence
-            """,
-            (latest["agent_run_id"],),
-        ).fetchall()
-        for trace_row in trace_rows:
-            item = _decode_fields(trace_row, "arguments_json", "result_json")
-            item["is_official_mcp"] = bool(item["is_official_mcp"])
-            item["result_summary"] = _result_summary(item.pop("result", None))
-            trace.append(item)
+    trace = _agent_tool_trace(connection, tables, str(latest["agent_run_id"]))
     return {
         "latest_run": latest,
         "tool_trace": trace,
@@ -615,7 +762,71 @@ def _agent_summary(
             None,
         ),
         "run_history": history,
+        "reviews": reviews,
+        "advisories": _advisory_summary(connection, tables),
     }
+
+
+def _agent_tool_trace(
+    connection: sqlite3.Connection,
+    tables: set[str],
+    agent_run_id: str,
+) -> list[dict[str, Any]]:
+    if "agent_tool_trace" not in tables:
+        return []
+    trace: list[dict[str, Any]] = []
+    rows = connection.execute(
+        """
+        SELECT * FROM agent_tool_trace
+        WHERE agent_run_id=? ORDER BY sequence
+        """,
+        (agent_run_id,),
+    ).fetchall()
+    for row in rows:
+        item = _decode_fields(row, "arguments_json", "result_json")
+        item["is_official_mcp"] = bool(item["is_official_mcp"])
+        item["result_summary"] = _result_summary(item.pop("result", None))
+        trace.append(item)
+    return trace
+
+
+def _advisory_summary(
+    connection: sqlite3.Connection, tables: set[str]
+) -> list[dict[str, Any]]:
+    """Read optional rejected-candidate advisories on old and new databases."""
+
+    if "advisory_runs" not in tables:
+        return []
+    rows = connection.execute(
+        """
+        SELECT advisory.*, candidate.symbol, candidate.candidate_rank,
+               run.strategy_date
+        FROM advisory_runs AS advisory
+        LEFT JOIN candidates AS candidate
+          ON candidate.candidate_id=advisory.candidate_id
+        LEFT JOIN strategy_runs AS run ON run.run_id=advisory.run_id
+        ORDER BY COALESCE(advisory.ended_at, advisory.started_at) DESC,
+                 advisory.started_at DESC
+        """
+    ).fetchall()
+    advisories: list[dict[str, Any]] = []
+    for row in rows:
+        item = _decode_fields(row, "result_json")
+        trace: list[dict[str, Any]] = []
+        if "advisory_tool_trace" in tables:
+            trace = [
+                dict(trace_row)
+                for trace_row in connection.execute(
+                    """
+                    SELECT * FROM advisory_tool_trace
+                    WHERE advisory_run_id=? ORDER BY sequence
+                    """,
+                    (item["advisory_run_id"],),
+                ).fetchall()
+            ]
+        item["tool_trace"] = trace
+        advisories.append(item)
+    return advisories
 
 
 def _order_summary(
@@ -696,9 +907,8 @@ def _portfolio_summary(
         rows = connection.execute(
             """
             SELECT * FROM position_observations
-            ORDER BY observed_at DESC LIMIT ?
-            """,
-            (MAX_RECENT_ROWS,),
+            ORDER BY observed_at DESC
+            """
         ).fetchall()
         for row in rows:
             item = _decode_fields(row, "payload_json")
@@ -710,9 +920,8 @@ def _portfolio_summary(
         rows = connection.execute(
             """
             SELECT * FROM equity_observations
-            ORDER BY observed_at ASC LIMIT ?
-            """,
-            (MAX_RECENT_ROWS,),
+            ORDER BY observed_at ASC
+            """
         ).fetchall()
         equity_history = [_decode_fields(row, "payload_json") for row in rows]
 
@@ -721,9 +930,8 @@ def _portfolio_summary(
             """
             SELECT observed_at, equity, buying_power
             FROM account_snapshots WHERE equity IS NOT NULL
-            ORDER BY observed_at ASC LIMIT ?
-            """,
-            (MAX_RECENT_ROWS,),
+            ORDER BY observed_at ASC
+            """
         ).fetchall()
         equity_history = [dict(row) for row in rows]
 
@@ -779,7 +987,7 @@ def _kill_switch_summary(
     events: list[dict[str, Any]] = []
     if "control_events" in tables:
         event_rows = connection.execute(
-            "SELECT * FROM control_events ORDER BY id DESC LIMIT 20"
+            "SELECT * FROM control_events ORDER BY id DESC"
         ).fetchall()
         for event_row in event_rows:
             event = _decode_fields(event_row, "detail_json")
@@ -853,6 +1061,24 @@ def _entry_permission_summary(
         }
     )
     return result
+
+
+def _entry_permission_history(
+    connection: sqlite3.Connection, tables: set[str]
+) -> list[dict[str, Any]]:
+    if "entry_authorizations" not in tables:
+        return []
+    return [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT state, strategy_date, expires_at, reason, armed_at,
+                   consumed_at, revoked_at, revoke_reason
+            FROM entry_authorizations
+            ORDER BY armed_at DESC
+            """
+        ).fetchall()
+    ]
 
 
 def _decode_fields(row: sqlite3.Row, *fields: str) -> dict[str, Any]:

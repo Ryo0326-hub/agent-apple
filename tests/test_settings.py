@@ -16,6 +16,54 @@ def test_valid_development_settings_are_redacted(valid_env_file: Path) -> None:
     assert summary["featherless_key_present"] is False
     assert "dev-key" not in str(summary)
     assert "dev-secret" not in str(summary)
+    assert summary["market_data_profile"] == settings.market_data_status()
+    assert settings.market_data_status()["profile_id"] == (
+        "alpaca_basic_iex_indicative_v1"
+    )
+    assert settings.market_data_status()["stock_feed"] == "iex"
+    assert settings.market_data_status()["option_feed"] == "indicative"
+
+
+def test_basic_indicative_feeds_default_when_env_values_are_omitted(
+    tmp_path: Path, valid_env_text: str
+) -> None:
+    path = tmp_path / ".env.dev"
+    filtered = "\n".join(
+        line
+        for line in valid_env_text.splitlines()
+        if not line.startswith(("ALPACA_STOCK_FEED=", "ALPACA_OPTION_FEED="))
+    )
+    path.write_text(filtered + "\n", encoding="utf-8")
+
+    settings = load_settings(path)
+
+    assert settings.alpaca_stock_feed == "iex"
+    assert settings.alpaca_option_feed == "indicative"
+
+
+@pytest.mark.parametrize(
+    ("variable", "replacement", "message"),
+    [
+        ("ALPACA_STOCK_FEED=iex", "ALPACA_STOCK_FEED=sip", "must exactly equal iex"),
+        (
+            "ALPACA_OPTION_FEED=indicative",
+            "ALPACA_OPTION_FEED=opra",
+            "must exactly equal indicative",
+        ),
+    ],
+)
+def test_unapproved_market_data_feed_is_rejected_fail_closed(
+    tmp_path: Path,
+    valid_env_text: str,
+    variable: str,
+    replacement: str,
+    message: str,
+) -> None:
+    path = tmp_path / ".env.dev"
+    path.write_text(valid_env_text.replace(variable, replacement), encoding="utf-8")
+
+    with pytest.raises(ConfigurationError, match=message):
+        load_settings(path)
 
 
 def test_generic_env_filename_is_rejected(tmp_path: Path, valid_env_text: str) -> None:

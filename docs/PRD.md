@@ -1,7 +1,7 @@
 # ThetaTrap Product Requirements Document
 
-- **Version:** 1.2
-- **Status:** Implementation complete; market-hours canary, cloud release, and official result pending
+- **Version:** 1.3
+- **Status:** Competition implementation complete; Tuesday Basic-feed audit captured and Wednesday run pending
 - **Target:** Alpaca AI Trading Agents Hackathon, August 28–September 4, 2026
 - **Official trading/P&L window:** August 31–September 4, 2026
 - **Trading environment:** Alpaca paper trading only
@@ -131,7 +131,7 @@ For each scheduled symbol:
 3. For each expiration, identify the strike nearest spot that has both a call and put. An equal-distance tie uses the lower strike.
 4. Define ATM IV independently for each expiration as the arithmetic mean of the valid call and put IV at that expiration's selected ATM strike.
 5. Calculate the expected dollar move from the September 4 ATM call midpoint plus put midpoint at the same strike.
-6. Select the nearest short put and short call whose strikes are just outside `1.00 × expected_move`. Delta is a diagnostic, not a strike-selection gate.
+6. Enumerate short puts and calls outside `1.00 × expected_move`, testing the nearest balanced pair first. If the nearest Basic-feed contract lacks current open interest or a usable quote, search deterministically farther outward; never substitute or infer the missing value. Delta is a diagnostic, not a strike-selection gate.
 7. Search outward for the narrowest equally spaced, listed protective wings no wider than `$5` that satisfy liquidity, credit, and risk requirements.
 8. Require equal wing widths. If valid Greeks exist for all legs, require absolute estimated net position delta `<= 0.15`; missing indicative Greeks alone do not reject an otherwise valid structure.
 9. Calculate maximum loss as `(wing_width - proposed_credit) × 100`.
@@ -208,7 +208,13 @@ Recent Alpaca news is treated as untrusted data, never as instructions. Qwen use
 
 The model can choose whether to act on an already eligible bounded candidate, but cannot widen risk or authorize a deterministically ineligible candidate.
 
-### 7.4 MCP and local tool surface
+### 7.4 Rejected-candidate advisory
+
+When a complete strategy scan has no eligible candidate, ThetaTrap may run one separately persisted Qwen advisory for the best rejection. Selection is deterministic: fewest distinct failed gates, then failure-code tuple, symbol, and stable candidate identifier. The advisory receives the bounded event and rejection record and must call exactly six read-only Alpaca MCP tools: account, account configuration, clock, open option orders, positions, and symbol-specific news.
+
+The advisory has no local mutation tool, order intent, order schema, or entry tool. Its only valid outcomes are `REJECTION_CONTEXT_CLEAR`, `ADDITIONAL_RISK_FOUND`, and `INSUFFICIENT_ADVISORY_EVIDENCE`. The existing deterministic rejection remains final regardless of the model output. A unique run constraint makes the advisory at most once per strategy day, and its trace stores hashes rather than raw broker payloads.
+
+### 7.5 MCP and local tool surface
 
 The worker is an MCP client. It launches one long-lived, pinned `alpaca-mcp-server==2.3.0` child process over `stdio`, calls `initialize` and `list_tools`, verifies the expected tool names and schemas, and stores a schema hash before arming entries. The child receives only paper credentials with `ALPACA_PAPER_TRADE=true` and these coarse toolsets: `account,trading,assets,stock-data,options-data,news`.
 
@@ -232,7 +238,7 @@ Featherless returns function arguments as JSON text. The bridge parses that oute
 
 Before any entry dispatch, the policy gateway re-fetches account, clock, orders, positions, and quotes through MCP and reruns all hard gates. It then durably records the accepted tool call and `SUBMITTING` before forwarding it. A veto, rejection, invalid call, or pre-dispatch model timeout advances safely without a broker call. Once forwarding has been attempted, a later model timeout or invalid final prose cannot revert the state to `NO_TRADE`; broker reconciliation owns the outcome.
 
-### 7.5 Known MCP integration risk
+### 7.6 Known MCP integration risk
 
 Alpaca issue `#97` reports that Claude Desktop/Cowork serialized multi-leg `legs` as a string, causing `place_option_order` validation to fail. ThetaTrap owns its MCP bridge and passes a native parsed array. Contract tests and the exact pinned server/model probe must pass before arming; the first competition-account entry is the controlled live serialization canary. If it fails, the team may apply and disclose a minimal tested patch to the official MCP server; it may not silently bypass MCP with direct REST or an SDK.
 

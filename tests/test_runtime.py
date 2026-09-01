@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -197,7 +198,14 @@ async def test_entry_scan_uses_each_live_collection_timestamp_for_freshness(
 
     assert result["eligible_candidates"] == 0
     assert "now" not in collection_arguments
+    assert collection_arguments["stock_feed"] == "iex"
+    assert collection_arguments["option_feed"] == "indicative"
     assert evaluation_arguments["observed_at"] == collection_finished_at
+    run = store.find_active_strategy_run(environment=settings.environment)
+    assert run is not None
+    assert run["context"]["market_data_profile"]["profile_id"] == (
+        "alpaca_basic_iex_indicative_v1"
+    )
 
 
 @pytest.mark.asyncio
@@ -214,8 +222,15 @@ async def test_closed_weekend_cycle_is_read_only_and_records_heartbeat(
 
     assert report["status"] == "idle"
     assert report["execution_enabled"] is False
+    assert report["market_data_profile"]["profile_id"] == (
+        "alpaca_basic_iex_indicative_v1"
+    )
     assert connection.mutations == []
-    assert store.latest_health()["status"] == "healthy"
+    health = store.latest_health()
+    assert health is not None
+    assert health["status"] == "healthy"
+    detail = json.loads(health["detail_json"])
+    assert detail["market_data_profile"] == report["market_data_profile"]
 
 
 @pytest.mark.asyncio

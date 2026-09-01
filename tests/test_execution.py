@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from thetatrap.errors import PolicyError
-from thetatrap.execution import ExecutionService
+from thetatrap.execution import ExecutionService, quote_atomic_exit
 from thetatrap.settings import load_settings
 from thetatrap.storage import Store
 
@@ -166,6 +166,21 @@ def setup_runtime(tmp_path: Path, valid_env_file: Path, connection: FakeConnecti
     )
     service = ExecutionService(settings, store, connection)  # type: ignore[arg-type]
     return service, store, arguments
+
+
+@pytest.mark.asyncio
+async def test_exit_quote_rejects_unapproved_option_feed_before_mcp_read() -> None:
+    connection = FakeConnection()
+
+    with pytest.raises(ValueError, match="ALPACA_OPTION_FEED"):
+        await quote_atomic_exit(
+            connection,  # type: ignore[arg-type]
+            entry_arguments(),
+            now=NOW,
+            option_feed="opra",
+        )
+
+    assert connection.reads == []
 
 
 @pytest.mark.asyncio

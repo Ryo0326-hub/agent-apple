@@ -25,17 +25,21 @@ ThetaTrap is a hackathon engineering prototype. It uses Alpaca Basic indicative 
 | Maximum loss | Lower of `$500` or `0.5%` of observed equity |
 | AI | `Qwen/Qwen3-Coder-Next`, with `Qwen/Qwen3-32B` fallback |
 | Alpaca boundary | Official `alpaca-mcp-server==2.3.0` only |
-| Verification baseline | 191 automated tests passing |
-| Competition result | **PRE-SUBMISSION:** official fills, final equity, and realized P&L not yet recorded |
+| Verification baseline | 219 automated tests passing |
+| Competition result | Sep 1 interim: 176 candidate evaluations, 0 broker order attempts, 0 fills, `$100,000` equity; Sep 2 pending |
 
-**LIVE NOW:** the [public read-only competition dashboard](https://104-236-77-186.sslip.io/) is running from `v1.0.3-hackathon`. Add the demo video, final report, and LabLab project page after the competition result is available.
+The competition feed combination is an explicit fail-closed profile, not an
+implicit SDK default. See the [competition market-data profile](docs/COMPETITION_DATA_PROFILE.md)
+for its exact environment values, audit metadata, and limitations.
+
+**LIVE NOW:** the [public read-only competition dashboard](https://104-236-77-186.sslip.io/) is running from `v1.1.0-hackathon`. Add the demo video, final report, and LabLab project page after the competition result is available.
 
 ## How the strategy works
 
 1. **Start with verified events.** The schedule is frozen from first-party investor-relations announcements instead of trusting a live calendar scraper.
 2. **Measure the volatility setup.** The worker compares front- and next-week at-the-money implied volatility, calculates the expected move, and checks quote freshness, spreads, open interest, and buying power.
-3. **Construct one bounded candidate.** Deterministic code selects a symmetric iron condor and computes its exact four legs, credit, wing width, and maximum loss.
-4. **Let the AI investigate.** Qwen calls approved account, market, order, position, and news tools. It may veto a candidate for a finite event-risk reason or issue the exact pre-authorized order call.
+3. **Construct one bounded candidate.** Deterministic code searches outward from the expected-move thresholds for the nearest fully liquid short pair, then computes the exact four legs, credit, wing width, and maximum loss. Missing Basic-feed data never becomes an assumed value.
+4. **Let the AI investigate.** For an eligible candidate, Qwen calls approved account, market, order, position, and news tools. It may veto a finite event risk or issue the exact pre-authorized order call. When every candidate fails deterministic gates, a separate read-only Qwen advisory explains the best rejection but cannot authorize a trade.
 5. **Recheck before dispatch.** A policy gateway refreshes broker state and quotes, rejects any changed argument, consumes a date/account-bound one-shot authorization, and forwards at most one initial entry attempt for that strategy date.
 6. **Manage the lifecycle.** Deterministic code reconciles ambiguous timeouts, reprices or cancels the same logical order chain, monitors positions, and submits the complete opposite-side exit the next morning.
 
@@ -43,7 +47,7 @@ An iron condor sells one put spread and one call spread around the expected earn
 
 ## What makes it an AI agent
 
-Qwen is not decorative narration. It receives tool schemas, calls tools, examines evidence, and chooses whether an otherwise eligible candidate should proceed. Its decision can prevent a trade or produce the exact `place_option_order` call.
+Qwen is not decorative narration. It receives tool schemas, calls tools, and examines live MCP evidence. The execution reviewer can prevent an otherwise eligible candidate from trading or produce the exact `place_option_order` call. The separately persisted rejection advisor uses only six read tools and returns `REJECTION_CONTEXT_CLEAR`, `ADDITIONAL_RISK_FOUND`, or `INSUFFICIENT_ADVISORY_EVIDENCE`; none of those values can advance strategy state or authorize execution.
 
 The model cannot choose the symbol universe, expiration, strikes, quantity, limit price, or risk. It cannot call replacement, cancellation, or exit mutations. This split gives the model a meaningful qualitative role without allowing probabilistic output to rewrite the trading policy.
 
@@ -53,7 +57,9 @@ flowchart LR
     S --> M[Official Alpaca MCP server]
     M --> D[Account, clock, news, quotes, chains]
     D --> G[Deterministic strategy and risk gates]
-    G --> Q[Featherless Qwen tool loop]
+    G -->|eligible| Q[Featherless Qwen execution review]
+    G -->|all rejected| QA[Read-only Qwen rejection advisory]
+    QA --> N[Deterministic rejection remains final]
     Q -->|veto| N[NO_TRADE]
     Q -->|exact tool call| P[Fresh policy recheck]
     P --> A[One-shot entry authorization]
@@ -90,15 +96,15 @@ The first-party announcements and exclusion evidence are recorded in [docs/EVENT
 
 - Official Alpaca MCP v2.3.0 over stdio, with a pinned 19-tool required-schema hash and no direct Alpaca SDK or REST path.
 - Native four-leg MLEG entry and exit, one logical replacement/cancel chain, cancel/fill race handling, and client-ID recovery after ambiguous mutation timeouts.
-- SQLite audit records for tool calls, model decisions, market evidence, policy gates, authorizations, orders, fills, positions, equity, and state transitions.
+- SQLite audit records for tool calls, execution decisions, separately labeled non-authorizing advisories, market evidence, policy gates, authorizations, orders, fills, positions, equity, and state transitions.
 - A single-flight worker lease and restart reconciliation.
-- A private Streamlit operator dashboard, an isolated public read-only judge dashboard, and deterministic JSON/Markdown reports.
+- A private Streamlit operator dashboard, an isolated public read-only judge dashboard with every symbol/scan/gate and Qwen/MCP timeline, and deterministic JSON/Markdown reports.
 - A simulation-only replay covering an eligible candidate, stale-data rejection, model veto, duplicate-timeout recovery, and complete exit.
 - Docker Compose deployment with a single worker and loopback-only operator UI.
 
 ## Evidence and current status
 
-The deployed `v1.0.3-hackathon` release passes **191 automated tests**. A credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. Cloud restart recovery preserved the same database and zero order attempts. The five-scenario replay makes zero external broker mutations. The testing account remains stopped/disarmed and is used only for local fixtures and replay. The first competition-account live order is itself the controlled canary after all read-only release gates pass.
+The deployed `v1.1.0-hackathon` release passes **219 automated tests**. A credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. On September 1, the official worker recorded 176 deterministic candidate evaluations across PANW, MDB, CRDO, and GTLB. No structure passed every hard gate, so it made zero broker order attempts and zero fills; the account remained flat at `$100,000`. The separately labeled Qwen rejection advisory is read-only evidence, not a trade or profitability result. Cloud restart recovery preserved the same database and zero order attempts. The testing account remains stopped/disarmed and is used only for local fixtures and replay.
 
 Do not read a zero-trade replay or an unchanged account as profitability evidence. Final claims must come from the submitted competition account's timestamped equity and order history. See the sanitized [replay summary](evidence/replay-summary.md) and [release validation summary](evidence/validation-summary.md). Credentials, SQLite databases, and raw worker logs do not belong in public evidence.
 
@@ -167,6 +173,19 @@ PYTHONPATH=src .venv/bin/python -m thetatrap.cli \
 
 `agent-smoke` makes a real bounded Qwen request, exposes exactly five read-only official MCP tools, and requires a structured `READY` or `NOT_READY` result with finite reason codes. A `PASS` proves the MCP/model loop completed; the separate readiness field reports whether the observed account state is safe for the next preflight. It persists only redacted/hash evidence. Neither setup command has an entry-order tool path. Keep their raw local output out of the public repository.
 
+After a completed zero-eligible strategy run, an operator may request exactly one
+separately persisted, non-authorizing Qwen explanation of its best deterministic
+rejection:
+
+```bash
+PYTHONPATH=src .venv/bin/python -m thetatrap.cli \
+  --env-file .env.competition advisory-review --strategy-date 2026-09-01
+```
+
+The command exposes exactly six bounded read-only MCP tools, refuses any run
+with an eligible candidate or order state, fingerprints strategy/order state
+before and after the review, and is idempotent for that strategy run.
+
 ## Repository map
 
 ```text
@@ -193,7 +212,7 @@ evidence/            sanitized, judge-readable run evidence only
 - Add OPRA-quality quotes and explicit transaction-cost/slippage modeling.
 - Expand the event universe only after automated first-party event verification is reliable.
 - Evaluate model decisions and veto quality across more events and open-source models.
-- Extend the implemented public read-only judge dashboard with richer historical charts and alert context.
+- Add exportable judge filters and alert delivery to the implemented historical dashboard.
 - Extend monitoring, alerting, and recovery testing beyond the competition window.
 
 ## Submission material

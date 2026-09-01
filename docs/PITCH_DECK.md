@@ -41,6 +41,7 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 - Featherless-hosted Qwen calls approved local and official Alpaca MCP tools.
 - The model investigates account state, market data, orders, positions, and news.
 - It returns a finite veto or the exact pre-authorized `place_option_order` call.
+- If every structure fails hard gates, a separate six-read Qwen advisory explains the best rejection without authorizing anything.
 - It cannot alter symbol, strikes, expiration, quantity, price, or risk.
 
 **Visual:** Architecture diagram with the AI decision path and deterministic execution path in different colors.
@@ -66,16 +67,16 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 **Headline:** A live, read-only trail from agent state to account equity
 
-**On-slide copy for the disarmed baseline:**
+**On-slide copy for the current competition evidence:**
 
-- Integrated release: 191 automated tests passing.
-- Live paper baseline: `$100,000`, flat, and zero orders on August 31.
-- MCP and worker: `READY` after the Droplet read-only smoke test.
-- Baseline evidence only; final equity and P&L remain broker-reconciled paper results, never replay output.
+- Integrated release: 219 automated tests passing.
+- September 1: 176 deterministic evaluations across four symbols.
+- Result: no eligible structure, zero broker attempts/fills, flat at `$100,000`.
+- The dashboard separates hard-gate rejections from the non-authorizing Qwen advisory and MCP trace.
 
-**Visual:** Sanitized live public-dashboard screenshot beside the three evidence cards. After the official run, replace or supplement the baseline with the filled, unfilled, or veto outcome and the final flat-account evidence.
+**Visual:** Sanitized live public-dashboard screenshot beside the three evidence cards. After Wednesday, supplement this interim result with the final filled, unfilled, or veto outcome and flat-account evidence.
 
-**Speaker note:** The screenshot is the live, disarmed competition baseline captured on August 31, 2026. State the actual competition result only after broker reconciliation.
+**Speaker note:** This is a real no-trade result, not a replay and not evidence of profitability. State Wednesday's actual result only after broker reconciliation.
 
 ## Slide 6 — What this proves, and what comes next
 

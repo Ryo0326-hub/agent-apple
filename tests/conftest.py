@@ -21,6 +21,8 @@ def valid_env_text(tmp_path: Path) -> str:
             "ALPACA_SECRET_KEY=dev-secret",
             "ALPACA_PAPER_TRADE=true",
             "ALPACA_TOOLSETS=account,trading,assets,stock-data,options-data,news",
+            "ALPACA_STOCK_FEED=iex",
+            "ALPACA_OPTION_FEED=indicative",
             "FEATHERLESS_API_KEY=",
             "FEATHERLESS_BASE_URL=https://api.featherless.ai/v1",
             "FEATHERLESS_PRIMARY_MODEL=Qwen/Qwen3-Coder-Next",

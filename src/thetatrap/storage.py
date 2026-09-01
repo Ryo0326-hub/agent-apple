@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
@@ -18,7 +19,7 @@ from thetatrap.security import redact
 # ``schema_version`` is retained for the Checkpoint 1 compatibility contract.
 # Additive runtime tables have their own migration marker.
 SCHEMA_VERSION = "2"
-RUNTIME_SCHEMA_VERSION = "4"
+RUNTIME_SCHEMA_VERSION = "5"
 
 STRATEGY_STATES = frozenset(
     {
@@ -135,6 +136,18 @@ ORDER_CHAIN_TRANSITIONS: dict[str, frozenset[str]] = {
 
 AGENT_TERMINAL_STATUSES = frozenset({"COMPLETED", "VETOED", "FAILED", "TIMED_OUT"})
 AGENT_SMOKE_TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "TIMED_OUT"})
+ADVISORY_TERMINAL_STATUSES = frozenset({"COMPLETED", "FAILED", "TIMED_OUT"})
+ADVISORY_MODE = "READ_ONLY_REJECTED_CANDIDATE_ADVISORY"
+ADVISORY_READ_TOOLS = frozenset(
+    {
+        "get_account_info",
+        "get_account_config",
+        "get_clock",
+        "get_orders",
+        "get_all_positions",
+        "get_news",
+    }
+)
 
 
 class StorageInvariantError(ValueError):
@@ -389,6 +402,51 @@ class Store:
                     UNIQUE(smoke_run_id, sequence)
                 );
 
+                CREATE TABLE IF NOT EXISTS advisory_runs (
+                    advisory_run_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL,
+                    mode TEXT NOT NULL CHECK(
+                        mode = 'READ_ONLY_REJECTED_CANDIDATE_ADVISORY'
+                    ),
+                    model TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(
+                        status IN ('STARTED', 'COMPLETED', 'FAILED', 'TIMED_OUT')
+                    ),
+                    prompt_hash TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    result_json TEXT,
+                    error_type TEXT,
+                    FOREIGN KEY(run_id) REFERENCES strategy_runs(run_id),
+                    FOREIGN KEY(candidate_id) REFERENCES candidates(candidate_id),
+                    UNIQUE(run_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS advisory_tool_trace (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    advisory_run_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK(sequence >= 0),
+                    turn INTEGER NOT NULL CHECK(turn >= 1),
+                    tool_name TEXT NOT NULL CHECK(tool_name IN (
+                        'get_account_info',
+                        'get_account_config',
+                        'get_clock',
+                        'get_orders',
+                        'get_all_positions',
+                        'get_news'
+                    )),
+                    arguments_hash TEXT NOT NULL CHECK(length(arguments_hash) = 64),
+                    result_hash TEXT,
+                    status TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL CHECK(duration_ms >= 0),
+                    called_at TEXT NOT NULL,
+                    FOREIGN KEY(advisory_run_id)
+                        REFERENCES advisory_runs(advisory_run_id),
+                    UNIQUE(advisory_run_id, sequence)
+                );
+
                 CREATE TABLE IF NOT EXISTS order_intents (
                     intent_id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
@@ -589,6 +647,10 @@ class Store:
                     ON agent_tool_trace(agent_run_id, sequence);
                 CREATE INDEX IF NOT EXISTS idx_agent_smoke_trace_run
                     ON agent_smoke_trace(smoke_run_id, sequence);
+                CREATE INDEX IF NOT EXISTS idx_advisory_runs_strategy_run
+                    ON advisory_runs(run_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_advisory_trace_run
+                    ON advisory_tool_trace(advisory_run_id, sequence);
                 CREATE INDEX IF NOT EXISTS idx_order_history_chain
                     ON order_status_history(chain_id, id);
                 CREATE INDEX IF NOT EXISTS idx_broker_activities_run
@@ -646,6 +708,18 @@ class Store:
                 BEFORE DELETE ON agent_smoke_trace
                 BEGIN
                     SELECT RAISE(ABORT, 'agent_smoke_trace is append-only');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS advisory_tool_trace_no_update
+                BEFORE UPDATE ON advisory_tool_trace
+                BEGIN
+                    SELECT RAISE(ABORT, 'advisory_tool_trace is append-only');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS advisory_tool_trace_no_delete
+                BEFORE DELETE ON advisory_tool_trace
+                BEGIN
+                    SELECT RAISE(ABORT, 'advisory_tool_trace is append-only');
                 END;
 
                 CREATE TRIGGER IF NOT EXISTS fills_no_update
@@ -1875,6 +1949,214 @@ class Store:
             ).fetchall()
         return [_agent_tool_dict(row) for row in rows]
 
+    def start_advisory_run(
+        self,
+        advisory_run_id: str,
+        *,
+        run_id: str,
+        candidate_id: str,
+        model: str,
+        prompt_hash: str,
+        config_hash: str,
+        mode: str = ADVISORY_MODE,
+        started_at: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        """Start the sole non-authorizing advisory allowed for a strategy run."""
+
+        if mode != ADVISORY_MODE:
+            raise StorageInvariantError("invalid advisory mode")
+        expected = {
+            "advisory_run_id": advisory_run_id,
+            "run_id": run_id,
+            "candidate_id": candidate_id,
+            "mode": mode,
+            "model": model,
+            "prompt_hash": prompt_hash,
+            "config_hash": config_hash,
+            "started_at": _timestamp(started_at),
+        }
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            candidate = _required_row(
+                connection.execute(
+                    "SELECT run_id, eligible FROM candidates WHERE candidate_id=?",
+                    (candidate_id,),
+                ).fetchone(),
+                f"advisory candidate {candidate_id}",
+            )
+            if candidate["run_id"] != run_id:
+                raise StorageInvariantError(
+                    "advisory candidate belongs to another strategy run"
+                )
+            if bool(candidate["eligible"]):
+                raise StorageInvariantError(
+                    "advisory can only review a deterministically rejected candidate"
+                )
+            existing = connection.execute(
+                "SELECT * FROM advisory_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+            if existing is not None:
+                stable_expected = dict(expected)
+                stable_expected.pop("started_at")
+                _assert_record_matches(existing, stable_expected, "advisory run")
+                return _advisory_run_dict(existing)
+            connection.execute(
+                """
+                INSERT INTO advisory_runs(
+                    advisory_run_id, run_id, candidate_id, mode, model, status,
+                    prompt_hash, config_hash, started_at
+                ) VALUES (?, ?, ?, ?, ?, 'STARTED', ?, ?, ?)
+                """,
+                tuple(expected.values()),
+            )
+            row = connection.execute(
+                "SELECT * FROM advisory_runs WHERE advisory_run_id=?",
+                (advisory_run_id,),
+            ).fetchone()
+        return _advisory_run_dict(_required_row(row, "advisory run"))
+
+    def finish_advisory_run(
+        self,
+        advisory_run_id: str,
+        status: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error_type: str | None = None,
+        ended_at: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        if status not in ADVISORY_TERMINAL_STATUSES:
+            raise StorageInvariantError(f"invalid terminal advisory status: {status}")
+        result_json = _audit_json(result) if result is not None else None
+        expected_terminal = {
+            "status": status,
+            "result_json": result_json,
+            "error_type": error_type,
+        }
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = _required_row(
+                connection.execute(
+                    "SELECT * FROM advisory_runs WHERE advisory_run_id=?",
+                    (advisory_run_id,),
+                ).fetchone(),
+                f"advisory run {advisory_run_id}",
+            )
+            if existing["status"] in ADVISORY_TERMINAL_STATUSES:
+                _assert_record_matches(
+                    existing, expected_terminal, "finished advisory run"
+                )
+                return _advisory_run_dict(existing)
+            if existing["status"] != "STARTED":
+                raise StorageInvariantError(
+                    f"advisory run cannot finish from status {existing['status']}"
+                )
+            connection.execute(
+                """
+                UPDATE advisory_runs
+                SET status=?, ended_at=?, result_json=?, error_type=?
+                WHERE advisory_run_id=? AND status='STARTED'
+                """,
+                (
+                    status,
+                    _timestamp(ended_at),
+                    result_json,
+                    error_type,
+                    advisory_run_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM advisory_runs WHERE advisory_run_id=?",
+                (advisory_run_id,),
+            ).fetchone()
+        return _advisory_run_dict(_required_row(row, "finished advisory run"))
+
+    def advisory_run_for_strategy(self, run_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM advisory_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return _advisory_run_dict(row) if row is not None else None
+
+    def record_advisory_tool_call(
+        self,
+        advisory_run_id: str,
+        sequence: int,
+        *,
+        turn: int,
+        tool_name: str,
+        arguments_hash: str,
+        result_hash: str | None,
+        status: str,
+        duration_ms: int,
+        called_at: str | datetime | None = None,
+    ) -> dict[str, Any]:
+        if sequence < 0 or turn < 1 or duration_ms < 0:
+            raise StorageInvariantError(
+                "advisory tool sequence, turn, and duration are invalid"
+            )
+        if tool_name not in ADVISORY_READ_TOOLS:
+            raise StorageInvariantError(
+                "advisory trace accepts only the fixed read-only tool set"
+            )
+        for label, value in (
+            ("arguments_hash", arguments_hash),
+            ("result_hash", result_hash),
+        ):
+            if value is not None and re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise StorageInvariantError(f"invalid advisory {label}")
+        expected = {
+            "advisory_run_id": advisory_run_id,
+            "sequence": sequence,
+            "turn": turn,
+            "tool_name": tool_name,
+            "arguments_hash": arguments_hash,
+            "result_hash": result_hash,
+            "status": status,
+            "duration_ms": duration_ms,
+        }
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM advisory_tool_trace
+                WHERE advisory_run_id=? AND sequence=?
+                """,
+                (advisory_run_id, sequence),
+            ).fetchone()
+            if existing is not None:
+                _assert_record_matches(existing, expected, "advisory tool trace")
+                return _advisory_tool_dict(existing)
+            connection.execute(
+                """
+                INSERT INTO advisory_tool_trace(
+                    advisory_run_id, sequence, turn, tool_name, arguments_hash,
+                    result_hash, status, duration_ms, called_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (*expected.values(), _timestamp(called_at)),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM advisory_tool_trace
+                WHERE advisory_run_id=? AND sequence=?
+                """,
+                (advisory_run_id, sequence),
+            ).fetchone()
+        return _advisory_tool_dict(_required_row(row, "advisory tool trace"))
+
+    def list_advisory_tool_calls(
+        self, advisory_run_id: str
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM advisory_tool_trace
+                WHERE advisory_run_id=? ORDER BY sequence
+                """,
+                (advisory_run_id,),
+            ).fetchall()
+        return [_advisory_tool_dict(row) for row in rows]
+
     def start_agent_smoke(
         self,
         smoke_run_id: str,
@@ -3021,6 +3303,14 @@ def _agent_tool_dict(row: sqlite3.Row) -> dict[str, Any]:
 
 def _agent_smoke_run_dict(row: sqlite3.Row) -> dict[str, Any]:
     return _json_row(row, "result_json")
+
+
+def _advisory_run_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return _json_row(row, "result_json")
+
+
+def _advisory_tool_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
 
 
 def _order_intent_dict(row: sqlite3.Row) -> dict[str, Any]:
