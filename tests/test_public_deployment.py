@@ -365,6 +365,7 @@ def test_public_source_has_no_storage_or_operator_control_surface() -> None:
     assert "prefers-color-scheme: dark" in source
     assert "--tt-card: #17241e" in source
     assert '[data-testid="stMetricValue"] p' in source
+    assert "Equity remained unchanged across" in source
 
 
 def test_build_revisions_are_strictly_bounded() -> None:

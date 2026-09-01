@@ -1028,7 +1028,14 @@ def _render_orders_and_portfolio(view: Mapping[str, Any]) -> None:
     ]
     if equity_history:
         st.markdown("#### Equity observations")
-        st.line_chart(equity_history, x="observed_at", y="equity", height=230)
+        distinct_equity = {item.get("equity") for item in equity_history}
+        if len(equity_history) > 1 and len(distinct_equity) > 1:
+            st.line_chart(equity_history, x="observed_at", y="equity", height=230)
+        else:
+            st.info(
+                f"Equity remained unchanged across {len(equity_history):,} "
+                "broker observations."
+            )
         with st.expander("Equity observation table", expanded=False):
             st.dataframe(equity_history, width="stretch", hide_index=True)
 
