@@ -12,7 +12,7 @@ ThetaTrap separates those responsibilities. Featherless-hosted Qwen calls tools 
 
 For the competition, I froze seven earnings events and excluded DELL for ambiguous timing and NTAP for unavailable weekly expirations. The agent may review two candidates, but gets only one broker entry attempt per date.
 
-The release has 219 passing tests, five broker-isolated replay scenarios, restart recovery, one-shot authorization, automatic exit, and private/public Streamlit dashboards. Judges can see every scan, hard gate, Qwen review, MCP trace, order, fill, and equity update without exposing credentials.
+The release has 220 passing tests, five broker-isolated replay scenarios, restart recovery, one-shot authorization, automatic exit, and private/public Streamlit dashboards. Judges can see every scan, hard gate, Qwen review, MCP trace, order, fill, and equity update without exposing credentials.
 
 On September 1, ThetaTrap recorded 176 evaluations across four symbols. None passed every hard gate, so it made zero broker attempts or fills and stayed flat at $100,000. I kept that no-trade result visible instead of changing the rules afterward. **Add the September 2 and final reconciled outcome before publishing.**
 

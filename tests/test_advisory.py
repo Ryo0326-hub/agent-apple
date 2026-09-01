@@ -228,6 +228,45 @@ async def test_qwen_advisory_requires_all_reads_and_non_authorizing_json(
     assert len(decision.trace) == 6
 
 
+@pytest.mark.asyncio
+async def test_qwen_advisory_repairs_one_invalid_final_without_repeating_reads(
+    valid_env_file: Path,
+) -> None:
+    connection = _ReadOnlyConnection()
+    tools = AdvisoryReadOnlyTools(connection, symbol="PANW")
+    calls = [
+        _tool_call(name, _read_arguments(name), index)
+        for index, name in enumerate(sorted(QWEN_READ_TOOLS))
+    ]
+    valid = {
+        "assessment": "REJECTION_CONTEXT_CLEAR",
+        "summary": "The deterministic rejection remains final.",
+        "evidence": ["The account is flat and no open option order exists."],
+    }
+    client = _FakeClient(
+        [
+            _response(calls),
+            _response(None, "I reviewed the evidence but omitted JSON."),
+            _response(None, json.dumps(valid)),
+        ]
+    )
+
+    decision = await QwenAdvisoryAgent(
+        load_settings(valid_env_file), tools, client=client
+    ).review(
+        SimpleNamespace(
+            symbol="PANW",
+            event={"symbol": "PANW", "status": "verified"},
+            rejection=_rejected_payload("OPTION_SPREAD_WIDE"),
+        )
+    )
+
+    assert decision.assessment == "REJECTION_CONTEXT_CLEAR"
+    assert decision.turns == 3
+    assert decision.tool_calls == 6
+    assert len(connection.calls) == 6
+
+
 def test_advisory_result_schema_cannot_return_allow_or_order_fields() -> None:
     from thetatrap import advisory
 

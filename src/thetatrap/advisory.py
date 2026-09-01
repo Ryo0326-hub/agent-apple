@@ -30,6 +30,7 @@ from thetatrap.storage import ADVISORY_MODE, Store
 ADVISORY_MAX_TURNS = 8
 ADVISORY_MAX_TOOL_CALLS = 6
 ADVISORY_MAX_SECONDS = 60
+ADVISORY_MAX_FINAL_REPAIRS = 1
 ADVISORY_MAX_TOOL_RESULT_CHARS = 6_000
 ADVISORY_MAX_EMPTY_TOOL_RESPONSES = 1
 ADVISORY_ASSESSMENTS = frozenset(
@@ -325,6 +326,7 @@ class QwenAdvisoryAgent:
         prompt_tokens = 0
         completion_tokens = 0
         empty_responses = 0
+        final_repairs = 0
 
         for turn in range(1, ADVISORY_MAX_TURNS + 1):
             remaining = deadline - time.monotonic()
@@ -355,7 +357,30 @@ class QwenAdvisoryAgent:
                     raise PolicyError(
                         "advisory attempted a tool after completing its fixed read set"
                     )
-                assessment, summary, observations = _parse_advisory(message.content)
+                try:
+                    assessment, summary, observations = _parse_advisory(
+                        message.content
+                    )
+                except AgentError:
+                    if final_repairs >= ADVISORY_MAX_FINAL_REPAIRS:
+                        raise
+                    final_repairs += 1
+                    messages.append(
+                        {"role": "assistant", "content": message.content or ""}
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your prior final response failed the required JSON "
+                                "schema. Return JSON only with exactly assessment, "
+                                "summary, and evidence. Use one permitted assessment, "
+                                "one non-empty summary string, and 1-5 non-empty "
+                                "evidence strings. Do not call tools or add fields."
+                            ),
+                        }
+                    )
+                    continue
                 return AdvisoryDecision(
                     assessment=assessment,
                     summary=summary,

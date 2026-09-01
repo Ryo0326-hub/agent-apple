@@ -25,7 +25,7 @@ ThetaTrap is a hackathon engineering prototype. It uses Alpaca Basic indicative 
 | Maximum loss | Lower of `$500` or `0.5%` of observed equity |
 | AI | `Qwen/Qwen3-Coder-Next`, with `Qwen/Qwen3-32B` fallback |
 | Alpaca boundary | Official `alpaca-mcp-server==2.3.0` only |
-| Verification baseline | 219 automated tests passing |
+| Verification baseline | 220 automated tests passing |
 | Competition result | Sep 1 interim: 176 candidate evaluations, 0 broker order attempts, 0 fills, `$100,000` equity; Sep 2 pending |
 
 The competition feed combination is an explicit fail-closed profile, not an
@@ -104,7 +104,7 @@ The first-party announcements and exclusion evidence are recorded in [docs/EVENT
 
 ## Evidence and current status
 
-The deployed `v1.1.0-hackathon` release passes **219 automated tests**. A credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. On September 1, the official worker recorded 176 deterministic candidate evaluations across PANW, MDB, CRDO, and GTLB. No structure passed every hard gate, so it made zero broker order attempts and zero fills; the account remained flat at `$100,000`. The separately labeled Qwen rejection advisory is read-only evidence, not a trade or profitability result. Cloud restart recovery preserved the same database and zero order attempts. The testing account remains stopped/disarmed and is used only for local fixtures and replay.
+The deployed `v1.1.0-hackathon` release passes **220 automated tests**. A credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. On September 1, the official worker recorded 176 deterministic candidate evaluations across PANW, MDB, CRDO, and GTLB. No structure passed every hard gate, so it made zero broker order attempts and zero fills; the account remained flat at `$100,000`. Tuesday's separately labeled Qwen advisory completed all six read-only MCP calls but failed strict final-response validation, which the dashboard reports as `FAILED`; it did not change the no-trade result. Cloud restart recovery preserved the same database and zero order attempts. The testing account remains stopped/disarmed and is used only for local fixtures and replay.
 
 Do not read a zero-trade replay or an unchanged account as profitability evidence. Final claims must come from the submitted competition account's timestamped equity and order history. See the sanitized [replay summary](evidence/replay-summary.md) and [release validation summary](evidence/validation-summary.md). Credentials, SQLite databases, and raw worker logs do not belong in public evidence.
 

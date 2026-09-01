@@ -26,7 +26,7 @@ When every candidate is rejected before execution review, a separately labeled Q
 
 ## Evidence and result
 
-- Integrated release: 219 automated tests passing.
+- Integrated release: 220 automated tests passing.
 - Five simulation-only replay scenarios with zero external broker mutations.
 - Pinned `alpaca-mcp-server==2.3.0` and required-tool schema hash.
 - Persistent audit linking evidence, model decisions, policy, authorizations, orders, positions, and equity.

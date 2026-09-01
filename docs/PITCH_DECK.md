@@ -69,7 +69,7 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 **On-slide copy for the current competition evidence:**
 
-- Integrated release: 219 automated tests passing.
+- Integrated release: 220 automated tests passing.
 - September 1: 176 deterministic evaluations across four symbols.
 - Result: no eligible structure, zero broker attempts/fills, flat at `$100,000`.
 - The dashboard separates hard-gate rejections from the non-authorizing Qwen advisory and MCP trace.

@@ -33,7 +33,7 @@ The team—not the judges—runs the worker against the submitted paper-account 
 
 ## Software release gates
 
-- [x] Integrated suite passes: 219 automated tests.
+- [x] Integrated suite passes: 220 automated tests.
 - [x] Five-scenario replay completes with zero external broker mutations.
 - [x] Official `alpaca-mcp-server==2.3.0` and the committed required-tool schema hash are pinned.
 - [x] Real Featherless Qwen probe completed five official MCP reads, exposed zero mutation tools, and returned structured `READY`.
