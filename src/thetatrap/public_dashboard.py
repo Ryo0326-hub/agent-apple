@@ -544,6 +544,17 @@ def main() -> None:
           --tt-mint: #dff7ec;
           --tt-amber: #f4b544;
           --tt-surface: #f7faf8;
+          --tt-card: rgba(255,255,255,.82);
+        }
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --tt-ink: #edf8f2;
+            --tt-muted: #a9bbb2;
+            --tt-line: #34473e;
+            --tt-green: #72d6aa;
+            --tt-surface: #121c18;
+            --tt-card: #17241e;
+          }
         }
         header[data-testid="stHeader"],
         [data-testid="stToolbar"],
@@ -593,12 +604,19 @@ def main() -> None:
         }
         [data-testid="stMetric"] {
           border: 1px solid var(--tt-line);
-          background: rgba(255,255,255,.72);
+          background: var(--tt-card);
           border-radius: 12px;
           padding: .75rem .8rem;
           min-height: 94px;
         }
         [data-testid="stMetricLabel"] { color: var(--tt-muted); }
+        [data-testid="stMetricValue"] { color: var(--tt-ink); }
+        [data-testid="stMetricValue"] p {
+          color: var(--tt-ink);
+          font-size: clamp(1.25rem, 1.8vw, 1.85rem) !important;
+          line-height: 1.08;
+          white-space: nowrap;
+        }
         [data-testid="stDataFrame"] { border: 1px solid var(--tt-line); border-radius: 12px; overflow: hidden; }
         div[data-testid="stExpander"] { border-color: var(--tt-line); border-radius: 12px; }
         @media (max-width: 640px) {

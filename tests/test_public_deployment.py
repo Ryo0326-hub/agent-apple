@@ -362,6 +362,9 @@ def test_public_source_has_no_storage_or_operator_control_surface() -> None:
     assert "Read-only rejected-candidate advisories" in source
     assert "NON-CONSOLIDATED DATA PROFILE" in source
     assert "no mutation callbacks" in source
+    assert "prefers-color-scheme: dark" in source
+    assert "--tt-card: #17241e" in source
+    assert '[data-testid="stMetricValue"] p' in source
 
 
 def test_build_revisions_are_strictly_bounded() -> None:
