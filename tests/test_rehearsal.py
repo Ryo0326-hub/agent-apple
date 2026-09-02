@@ -13,7 +13,7 @@ from pydantic import SecretStr
 from thetatrap import rehearsal
 from thetatrap.execution import BrokerSnapshot
 from thetatrap.runtime import ThetaTrapRuntime
-from thetatrap.settings import load_settings
+from thetatrap.settings import StrategyProfile, load_settings
 from thetatrap.storage import Store
 
 
@@ -161,6 +161,8 @@ async def test_decision_rehearsal_uses_ephemeral_store_and_proves_no_mutation(
     assert result["safety_status"] == "PASS"
     assert result["mode"] == "EPHEMERAL_LIVE_READ_REHEARSAL"
     assert result["production_database_touched"] is False
+    assert result["strategy_profile"] == "earnings"
+    assert result["strategy_symbols"] == ["PANW", "MDB", "CRDO", "GTLB"]
     assert result["event_symbols"] == ["PANW", "MDB", "CRDO", "GTLB"]
     assert result["broker_safety"] == {
         "mutation_dispatch_attempts": 0,
@@ -173,6 +175,85 @@ async def test_decision_rehearsal_uses_ephemeral_store_and_proves_no_mutation(
         "positions_unchanged": True,
     }
     assert source_database.exists() is source_existed_before
+
+
+@pytest.mark.asyncio
+async def test_intraday_decision_rehearsal_uses_canary_runtime_and_version(
+    monkeypatch: pytest.MonkeyPatch, valid_env_file: Path
+) -> None:
+    delegate = ReadOnlyConnection()
+
+    @asynccontextmanager
+    async def connection_factory(*_: Any) -> AsyncIterator[ReadOnlyConnection]:
+        yield delegate
+
+    async def fake_rehearse_intraday_entry(
+        self: ThetaTrapRuntime,
+        snapshot: BrokerSnapshot,
+        now: datetime,
+        *,
+        strategy_date: date,
+    ) -> dict[str, Any]:
+        assert snapshot.market_is_open is True
+        assert now == NOW
+        assert strategy_date == date(2026, 9, 3)
+        self.store.create_strategy_run(
+            "tt-run-replay-2026-09-03-canary-test",
+            environment="replay",
+            strategy_date=strategy_date.isoformat(),
+            strategy_version="2.0-sep3-canary",
+            config_hash="canary-test-config-hash",
+            context={"symbols": ["QQQ", "SPY"], "strategy_profile": "intraday_canary"},
+            initial_state="SCREENING",
+        )
+        return {"status": "screening", "eligible_candidates": 0}
+
+    monkeypatch.setattr(
+        ThetaTrapRuntime,
+        "rehearse_intraday_entry",
+        fake_rehearse_intraday_entry,
+        raising=False,
+    )
+    settings = load_settings(valid_env_file).model_copy(
+        update={
+            "featherless_api_key": SecretStr("test-featherless-key"),
+            "strategy_profile": StrategyProfile.INTRADAY_CANARY,
+        }
+    )
+
+    result = await rehearsal.run_decision_rehearsal(
+        settings,
+        date(2026, 9, 3),
+        now=NOW,
+        connection_factory=connection_factory,  # type: ignore[arg-type]
+    )
+
+    assert result["outcome"] == "NO_ELIGIBLE_CANDIDATE"
+    assert result["safety_status"] == "PASS"
+    assert result["strategy_profile"] == "intraday_canary"
+    assert result["strategy_symbols"] == ["QQQ", "SPY"]
+    assert result["event_symbols"] == []
+    assert result["strategy_state"] == "SCREENING"
+    assert result["broker_safety"]["mutation_dispatch_attempts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_intraday_decision_rehearsal_rejects_non_sep3_date(
+    valid_env_file: Path,
+) -> None:
+    settings = load_settings(valid_env_file).model_copy(
+        update={
+            "featherless_api_key": SecretStr("test-featherless-key"),
+            "strategy_profile": StrategyProfile.INTRADAY_CANARY,
+        }
+    )
+
+    with pytest.raises(Exception, match="limited to 2026-09-03"):
+        await rehearsal.run_decision_rehearsal(
+            settings,
+            date(2026, 9, 2),
+            now=NOW,
+        )
 
 
 @pytest.mark.asyncio

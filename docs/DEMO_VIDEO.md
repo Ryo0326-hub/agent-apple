@@ -32,7 +32,7 @@ Target length: 3 minutes. Record at 1080p. Use the public read-only dashboard fo
 
 **Narration:**
 
-“Deterministic code measures the front-week volatility premium, expected move, liquidity, and quote freshness. It constructs one symmetric iron condor, limits size to one contract, and caps maximum loss at the lower of five hundred dollars or zero-point-five percent of equity. The agent may review two candidates sequentially, but only one initial broker entry attempt is allowed per strategy date.”
+“The primary profile measures earnings volatility, expected move, liquidity, and quote freshness, then builds one bounded iron condor. After 314 rejected evaluations on September first and second, I added a clearly labeled September-third canary: QQQ or SPY, one-dollar wings, at least twenty cents credit, at most eighty dollars risk, and a same-day exit. It is not an automatic fallback. Only one initial broker entry attempt is allowed for the date.”
 
 **Shot:** Candidate card with four legs, credit, wing width, maximum loss, and gate table. Highlight DELL and NTAP exclusion reasons.
 
@@ -48,7 +48,7 @@ Target length: 3 minutes. Record at 1080p. Use the public read-only dashboard fo
 
 **Narration:**
 
-“Immediately before dispatch, the policy gateway refreshes broker state and quotes. A date- and account-bound one-shot authorization is consumed atomically with the order attempt. Deterministic client IDs prevent duplicates after timeouts. The long-running worker handles repricing, cancellation, restart reconciliation, and the full next-morning exit.”
+“Immediately before dispatch, the policy gateway refreshes broker state and quotes. A date- and account-bound one-shot authorization is consumed atomically with the order attempt. Deterministic client IDs prevent duplicates after timeouts. The long-running worker handles repricing, cancellation, restart reconciliation, and the complete exit—next morning for earnings or the same afternoon for the canary.”
 
 **Shot:** Authorization state, exact-intent comparison, state transitions, and one timeout-reconciliation replay. Keep replay label visible.
 
@@ -70,7 +70,7 @@ Choose exactly one script after the official run.
 
 **Narration:**
 
-"The integrated release has one hundred and ninety-one passing automated tests and five broker-isolated replay scenarios covering eligibility, stale data, an AI veto, timeout recovery, and exit. The agent runs continuously on DigitalOcean using Docker Compose and persistent SQLite state."
+"The integrated release has 316 passing automated tests and five broker-isolated replay scenarios covering eligibility, stale data, an AI veto, timeout recovery, and exit. The agent runs continuously on DigitalOcean using Docker Compose and persistent SQLite state."
 
 **Shot:** CI result, replay summary, container health, and repository tree.
 

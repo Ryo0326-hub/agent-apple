@@ -45,6 +45,7 @@ services:
       THETATRAP_ENVIRONMENT: ${THETATRAP_ENVIRONMENT:?required}
       THETATRAP_READ_ONLY: ${THETATRAP_READ_ONLY:-true}
       THETATRAP_EXECUTION_ENABLED: ${THETATRAP_EXECUTION_ENABLED:-false}
+      THETATRAP_STRATEGY_PROFILE: ${THETATRAP_STRATEGY_PROFILE:?required}
       TZ: America/New_York
     volumes:
       - thetatrap-data:/data:ro

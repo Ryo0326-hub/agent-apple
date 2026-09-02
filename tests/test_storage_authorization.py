@@ -241,6 +241,48 @@ def test_begin_authorized_submission_commits_all_entry_state_atomically(
         )
 
 
+def test_kill_switch_revokes_unused_authorization_and_clear_does_not_rearm(
+    tmp_path: Path,
+) -> None:
+    store = make_store(tmp_path)
+    request = prepare_entry(store)
+
+    control = store.activate_kill_switch(
+        "operator emergency stop",
+        "operator",
+        activated_at=NOW + timedelta(minutes=1),
+    )
+
+    authorization = store.get_entry_authorization(
+        ENVIRONMENT, ACCOUNT_ID, STRATEGY_DATE
+    )
+    assert authorization is not None
+    assert authorization["state"] == "REVOKED"
+    assert authorization["revoke_reason"] == "kill switch: operator emergency stop"
+    with pytest.raises(StorageInvariantError, match="blocks entry authorization"):
+        store.arm_entry_authorization(
+            "authorization-2",
+            ENVIRONMENT,
+            ACCOUNT_ID,
+            "2026-09-02",
+            NOW + timedelta(days=1, minutes=15),
+            "operator",
+            "must remain blocked",
+            NOW + timedelta(days=1),
+        )
+
+    cleared = store.clear_kill_switch(
+        "broker state reviewed",
+        "operator",
+        expected_version=control["version"],
+        cleared_at=NOW + timedelta(minutes=2),
+    )
+
+    assert cleared["kill_switch_enabled"] is False
+    with pytest.raises(StorageInvariantError, match="not ARMED: REVOKED"):
+        begin_entry(store, request=request, observed_at=NOW + timedelta(minutes=3))
+
+
 @pytest.mark.parametrize(
     "failure",
     ["expired", "kill_switch", "tampered_request", "bad_run", "bad_chain"],
@@ -265,7 +307,7 @@ def test_failed_authorized_submission_rolls_back_every_write(
     )
     expected_error = {
         "expired": "expired",
-        "kill_switch": "kill switch",
+        "kill_switch": "not ARMED: REVOKED",
         "tampered_request": "durable entry intent",
         "bad_run": "POLICY_CHECK",
         "bad_chain": "PLANNED",
@@ -276,7 +318,9 @@ def test_failed_authorized_submission_rolls_back_every_write(
     authorization = store.get_entry_authorization(
         ENVIRONMENT, ACCOUNT_ID, STRATEGY_DATE
     )
-    assert authorization is not None and authorization["state"] == "ARMED"
+    expected_authorization_state = "REVOKED" if failure == "kill_switch" else "ARMED"
+    assert authorization is not None
+    assert authorization["state"] == expected_authorization_state
     assert store.latest_order_attempt("chain-1") is None
     expected_run_state = "AI_REVIEW" if failure == "bad_run" else "POLICY_CHECK"
     assert store.get_strategy_run("run-1")["state"] == expected_run_state  # type: ignore[index]

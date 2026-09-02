@@ -1,6 +1,6 @@
 # ThetaTrap
 
-**A bounded, MCP-native AI agent for defined-risk Alpaca paper-options trading around verified earnings events**
+**A bounded, MCP-native AI agent for defined-risk Alpaca paper-options trading with a verified-earnings primary profile and a disclosed final-day canary**
 
 ## Problem and idea
 
@@ -14,24 +14,26 @@ For each strategy date, deterministic code retrieves Alpaca Basic indicative opt
 
 The Basic competition profile is explicit and fail-closed: `ALPACA_STOCK_FEED=iex` and `ALPACA_OPTION_FEED=indicative`. If the nearest short strike has missing or unusable Basic data, deterministic code may search farther outside the expected move, but every original liquidity and risk gate still applies.
 
-Up to two ranked candidates may be reviewed sequentially before broker dispatch. Featherless-hosted Qwen calls approved account, market, order, position, and news tools. It either vetoes a candidate for a finite event-risk reason or issues the exact pre-authorized order call. Once one initial broker entry attempt is dispatched, no second candidate can reach the broker that date.
+After the September 1–2 earnings runs produced 314 rejected evaluations and no broker order, ThetaTrap added one transparently labeled September 3-only Intraday Theta Canary. It ranks QQQ and SPY using complete quote quality, builds one exact `$1`-wide condor expiring September 4, requires at least `$0.20` credit, caps defined loss at `$80`, and schedules entry and exit on the same day. This is a date-scoped competition adaptation, not an automatic fallback or a validated edge.
+
+Each scan ranks at most two candidates. For the Sep 3 canary, eligible Qwen review cycles are at least five minutes apart while the entry window remains open. Featherless-hosted Qwen calls approved account, market, order, position, and news tools. It either vetoes a candidate for a finite risk reason or issues the exact pre-authorized order call. Once one initial broker entry attempt is dispatched, no second candidate can reach the broker that date.
 
 ## Judgment with bounded authority
 
 Qwen cannot change the universe, expiration, strikes, quantity, price, or risk. A deterministic policy gateway refreshes broker state and quotes, compares every argument with the immutable intent, and consumes a date/account/environment-bound authorization before forwarding the MCP mutation.
 
-Repricing, cancellation, timeout reconciliation, restart recovery, and next-morning exit remain deterministic. A reported exit fill becomes `FLAT` only after a later broker snapshot confirms no positions and no open orders. The private dashboard owns controls; the public dashboard is read-only and credential-free.
+Repricing, cancellation, timeout reconciliation, restart recovery, and exit remain deterministic: next morning for earnings or the same afternoon for the canary. A reported exit fill becomes `FLAT` only after a later broker snapshot confirms no positions and no open orders. The private dashboard owns controls; the public dashboard is read-only and credential-free.
 
 When every candidate is rejected before execution review, a separately labeled Qwen advisory may call six bounded read-only Alpaca MCP tools to explain the best rejection. It cannot change the candidate, authorize an order, or advance strategy state.
 
 ## Evidence and result
 
-- Integrated release: 220 automated tests passing.
+- Integrated release: 316 automated tests passing.
 - Five simulation-only replay scenarios with zero external broker mutations.
 - Pinned `alpaca-mcp-server==2.3.0` and required-tool schema hash.
 - Persistent audit linking evidence, model decisions, policy, authorizations, orders, positions, and equity.
 
-September 1 interim: 176 deterministic candidate evaluations across PANW, MDB, CRDO, and GTLB produced no eligible structure, zero broker order attempts, and zero fills. The paper account remained flat at `$100,000`. September 2 remains pending.
+Across September 1 and 2, 314 deterministic candidate evaluations produced no eligible structure, zero broker order attempts, and zero fills. The paper account remained flat at `$100,000`. The dominant blockers were incomplete or stale Basic indicative option evidence across the required four legs.
 
 **PRE-SUBMISSION RESULT:** add the first competition-order canary outcome, filled count, starting/final equity, realized P&L, report digest/URL, and deployed Git revision. If no order fills, say so and preserve the recorded reason.
 

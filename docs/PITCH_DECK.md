@@ -18,7 +18,7 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 ## Slide 2 — The strategy in plain English
 
-**Headline:** Sell bounded earnings premium only when the evidence aligns
+**Headline:** Start with earnings; adapt transparently when evidence fails
 
 **On-slide copy:**
 
@@ -26,9 +26,11 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 2. Check volatility term structure, expected move, liquidity, and freshness.
 3. Build one symmetric, one-contract iron condor.
 4. Let Qwen veto qualitative event risk.
-5. Exit the complete position the next morning.
+5. Exit the complete position at the frozen profile time.
 
 **Facts:** Seven eligible events; DELL excluded for ambiguous release time; NTAP excluded because required weekly expirations were unavailable. Up to two candidates may be reviewed sequentially, but only one broker entry attempt is allowed per date.
+
+**Sep 3 adaptation:** After 314 rejected earnings evaluations, a separately labeled QQQ/SPY canary uses September 4 expiry, exact `$1` wings, minimum `$0.20` credit, maximum `$80` loss, and a same-day exit. It is not an automatic fallback or proof of alpha.
 
 **Visual:** Four-leg payoff diagram beside the event table.
 
@@ -54,11 +56,11 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 **On-slide copy:**
 
-- Maximum loss: lower of `$500` or `0.5%` of equity.
+- Maximum loss: earnings lower of `$500` or `0.5%` of equity; Sep 3 canary `$80`.
 - One contract, one position, one initial broker entry attempt per date.
 - Atomic one-shot authorization before dispatch.
 - Deterministic client IDs and reconciliation after ambiguous timeouts.
-- Restart-safe SQLite state and mandatory next-morning exit.
+- Restart-safe SQLite state and mandatory profile-timed exit: next morning for earnings, same afternoon for canary.
 - Kill switch blocks new exposure but not position-reducing exits.
 
 **Visual:** State timeline from candidate to flat, with timeout/restart branches.
@@ -69,14 +71,15 @@ Keep each slide visual and use speaker notes for detail. Target a three-minute p
 
 **On-slide copy for the current competition evidence:**
 
-- Integrated release: 220 automated tests passing.
-- September 1: 176 deterministic evaluations across four symbols.
-- Result: no eligible structure, zero broker attempts/fills, flat at `$100,000`.
+- Integrated release: 316 automated tests passing.
+- September 1–2: 314 deterministic evaluations across seven symbols.
+- Result through Sep 2: no eligible structure, zero broker attempts/fills, flat at `$100,000`.
+- Sep 3: disclose the canary's actual veto, order, fill, exit, and P&L without pre-claiming an outcome.
 - The dashboard separates hard-gate rejections from the non-authorizing Qwen advisory and MCP trace.
 
-**Visual:** Sanitized live public-dashboard screenshot beside the three evidence cards. After Wednesday, supplement this interim result with the final filled, unfilled, or veto outcome and flat-account evidence.
+**Visual:** Sanitized live public-dashboard screenshot beside the evidence cards. After September 3, supplement this interim result with the final filled, unfilled, or veto outcome and flat-account evidence.
 
-**Speaker note:** This is a real no-trade result, not a replay and not evidence of profitability. State Wednesday's actual result only after broker reconciliation.
+**Speaker note:** The September 1–2 no-trade result is real, not a replay or profitability evidence. State September 3's actual result only after broker reconciliation.
 
 ## Slide 6 — What this proves, and what comes next
 

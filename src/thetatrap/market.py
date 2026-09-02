@@ -70,8 +70,12 @@ async def collect_symbol_market(
     front_snapshots = await _fetch_chain(
         connection, normalized_symbol, trade_expiration, profile.option_feed
     )
-    back_snapshots = await _fetch_chain(
-        connection, normalized_symbol, term_expiration, profile.option_feed
+    back_snapshots = (
+        front_snapshots
+        if term_expiration == trade_expiration
+        else await _fetch_chain(
+            connection, normalized_symbol, term_expiration, profile.option_feed
+        )
     )
     calendar_reference = (now or datetime.now(UTC)).astimezone(UTC)
     previous_day = await previous_trading_day(

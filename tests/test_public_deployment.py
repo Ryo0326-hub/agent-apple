@@ -297,7 +297,10 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
         "AVGO",
     ]
     assert view["candidate"]["history"][1]["failed_gates"] == ["IV_RATIO_LOW"]
-    assert view["candidate"]["scan_matrix"][0]["latest_result"] == "ELIGIBLE"
+    snow_matrix = next(
+        item for item in view["candidate"]["scan_matrix"] if item["symbol"] == "SNOW"
+    )
+    assert snow_matrix["latest_result"] == "ELIGIBLE"
     assert view["agent"]["reviews"][0]["decision"] == "ALLOW"
     assert view["agent"]["advisories"][0]["kind"] == "READ_ONLY_ADVISORY"
     assert view["agent"]["advisories"][0]["decision"] == (
@@ -305,13 +308,77 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
     )
     assert view["agent"]["advisories"][0]["non_authorizing"] is True
     assert view["agent"]["advisories"][0]["evidence"]
-    assert view["agent"]["advisories"][0]["tool_trace"][0]["kind"] == (
-        "read-only hash"
-    )
+    assert view["agent"]["advisories"][0]["tool_trace"][0]["kind"] == ("read-only hash")
     assert view["mcp"]["timeline"][0]["tool"] == "get_clock"
     assert view["portfolio"]["equity_history"][0]["equity"] == 100070.0
     assert view["safety"]["read_only_viewer"] is True
     assert view["data_profile"]["option_feed"] == "indicative"
+    day = next(
+        item for item in view["competition_days"] if item["date"] == "2026-09-02"
+    )
+    assert day["scans"] == 2
+    assert day["eligible"] == 1
+    assert day["qwen_decisions"] == 1
+    assert any(item["category"] == "SCREEN" for item in view["activity_timeline"])
+    assert any(item["category"] == "QWEN" for item in view["activity_timeline"])
+
+
+def test_public_projection_labels_sep3_profile_without_exposing_run_context() -> None:
+    report = {
+        "strategy": {
+            "current_run": {
+                "run_id": "run-private",
+                "strategy_date": "2026-09-03",
+                "strategy_version": "canary-v1",
+                "state": "SCREENING",
+                "context": {
+                    "strategy_profile_id": "sep3_intraday_theta_canary_v1",
+                    "account_id": "private-account",
+                },
+            },
+            "run_history": [
+                {
+                    "run_id": "run-private",
+                    "strategy_date": "2026-09-03",
+                }
+            ],
+        },
+        "candidate": {
+            "history": [
+                {
+                    "run_id": "run-private",
+                    "strategy_date": "2026-09-03",
+                    "scanned_at": "2026-09-03T13:46:00Z",
+                    "symbol": "QQQ",
+                    "eligible": False,
+                    "payload": {
+                        "failures": [
+                            {"code": "OPTION_SPREAD_WIDE", "detail": "bounded"}
+                        ]
+                    },
+                }
+            ]
+        },
+        "orders": {"chains": []},
+    }
+
+    view = build_public_view(report)
+
+    assert view["strategy"]["profile"]["profile_id"] == (
+        "sep3_intraday_theta_canary_v1"
+    )
+    assert view["strategy"]["profile"]["name"] == "Intraday Theta Canary"
+    assert view["strategy"]["profile"]["maximum_defined_loss"] == "$80"
+    assert view["safety"]["maximum_defined_loss"] == "80.00"
+    assert any(
+        item["symbol"] == "QQQ" and item["configured"] == "SEP3_CANARY"
+        for item in view["candidate"]["scan_matrix"]
+    )
+    day = next(
+        item for item in view["competition_days"] if item["date"] == "2026-09-03"
+    )
+    assert day["outcome"] == "NO TRADE · GATES HELD"
+    assert "private-account" not in json.dumps(view)
 
 
 def test_public_source_has_no_storage_or_operator_control_surface() -> None:
@@ -325,9 +392,7 @@ def test_public_source_has_no_storage_or_operator_control_surface() -> None:
         if isinstance(node, ast.Import)
         for alias in node.names
     } | {
-        node.module or ""
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
     }
     assert "thetatrap.storage" not in imported_modules
     assert "thetatrap.dashboard" not in imported_modules
@@ -366,6 +431,11 @@ def test_public_source_has_no_storage_or_operator_control_surface() -> None:
     assert "--tt-card: #17241e" in source
     assert '[data-testid="stMetricValue"] p' in source
     assert "Equity remained unchanged across" in source
+    assert "Intraday Theta Canary" in source
+    assert "Sep 1–2 evidence" in source
+    assert "Root cause" in source
+    assert "Complete audit trail" in source
+    assert "not an automatic fallback" in source
 
 
 def test_build_revisions_are_strictly_bounded() -> None:

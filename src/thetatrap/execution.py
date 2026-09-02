@@ -493,7 +493,7 @@ class ExecutionService:
         if status in TERMINAL_ZERO_FILL_STATUSES:
             self.store.transition_order_chain(
                 chain_id,
-                "CANCELED" if status in {"canceled", "cancelled"} else status.upper(),
+                _terminal_chain_state(status),
                 attempt_id=attempt_id,
                 broker_status=status,
                 detail=order,
@@ -535,6 +535,285 @@ class ExecutionService:
             return None
         return self._apply_exit_order(run_id, chain_id, attempt_id, order)
 
+    async def resume_entry_submission(
+        self,
+        *,
+        run_id: str,
+        intent_id: str,
+        chain_id: str,
+        attempt_id: str,
+        arguments: dict[str, Any],
+        now: datetime | None = None,
+    ) -> ExecutionResult:
+        """Resume only the already-consumed, exact entry submission.
+
+        This is the narrow crash window after durable state reached SUBMITTING
+        but before the worker persisted a broker response.  The same immutable
+        client order ID is reused, so this cannot authorize a second logical
+        entry or consume a second daily authorization.
+        """
+
+        validate_mleg_arguments(arguments, action="entry")
+        attempt = self._validate_resume_attempt(
+            run_id=run_id,
+            intent_id=intent_id,
+            chain_id=chain_id,
+            attempt_id=attempt_id,
+            arguments=arguments,
+            required_chain_state="SUBMITTING",
+        )
+        run = self.store.get_strategy_run(run_id)
+        if run is None or run["state"] != "SUBMITTING":
+            raise PolicyError("entry resume requires a SUBMITTING strategy run")
+        authorization = self.store.get_entry_authorization(
+            environment=self.settings.environment,
+            account_id=self.settings.expected_account_id,
+            strategy_date=str(run["strategy_date"]),
+        )
+        expected_consumption = {
+            "consumed_run_id": run_id,
+            "consumed_intent_id": intent_id,
+            "consumed_chain_id": chain_id,
+            "consumed_attempt_id": attempt_id,
+        }
+        if authorization is None or authorization.get("state") != "CONSUMED":
+            raise PolicyError("entry resume requires its consumed authorization")
+        if any(
+            str(authorization.get(key) or "") != value
+            for key, value in expected_consumption.items()
+        ):
+            raise PolicyError("entry resume authorization identity does not match")
+
+        client_order_id = str(attempt["client_order_id"])
+        order = await self._lookup_by_client_id(client_order_id)
+        if order is not None:
+            return self._apply_entry_order(
+                run_id, chain_id, attempt_id, order, reconciled=True
+            )
+
+        snapshot = await self.read_broker_snapshot(run_id=run_id, now=now)
+        matching = _matching_snapshot_order(snapshot.open_orders, client_order_id)
+        if matching is not None:
+            return self._apply_entry_order(
+                run_id, chain_id, attempt_id, matching, reconciled=True
+            )
+        blockers = list(self.entry_admission(snapshot).reasons)
+        if blockers:
+            raise PolicyError("entry resume admission failed: " + ", ".join(blockers))
+
+        permit = make_entry_permit(
+            intent_id=intent_id, arguments=arguments, now=snapshot.observed_at
+        )
+        try:
+            wrapper = await self.connection.call_mutation(
+                "place_option_order",
+                arguments,
+                permit=permit,
+                principal="agent",
+            )
+            order = _order_data(wrapper)
+            return self._apply_entry_order(
+                run_id, chain_id, attempt_id, order, reconciled=False
+            )
+        except Exception as exc:
+            return await self._reconcile_ambiguous_entry(
+                run_id=run_id,
+                chain_id=chain_id,
+                attempt_id=attempt_id,
+                client_order_id=client_order_id,
+                original_error=exc,
+            )
+
+    async def resume_exit_submission(
+        self,
+        *,
+        run_id: str,
+        intent_id: str,
+        chain_id: str,
+        attempt_id: str,
+        arguments: dict[str, Any],
+        now: datetime | None = None,
+    ) -> ExecutionResult:
+        """Resume the exact persisted close after a worker restart."""
+
+        validate_mleg_arguments(arguments, action="exit")
+        attempt = self._validate_resume_attempt(
+            run_id=run_id,
+            intent_id=intent_id,
+            chain_id=chain_id,
+            attempt_id=attempt_id,
+            arguments=arguments,
+            required_chain_state="SUBMITTING",
+        )
+        run = self.store.get_strategy_run(run_id)
+        if run is None or run["state"] not in {"EXIT_SUBMITTING", "RISK_OFF"}:
+            raise PolicyError("exit resume requires an active exit strategy run")
+
+        client_order_id = str(attempt["client_order_id"])
+        order = await self._lookup_by_client_id(client_order_id)
+        if order is not None:
+            return self._apply_exit_order(run_id, chain_id, attempt_id, order)
+
+        snapshot = await self.read_broker_snapshot(run_id=run_id, now=now)
+        matching = _matching_snapshot_order(snapshot.open_orders, client_order_id)
+        if matching is not None:
+            return self._apply_exit_order(run_id, chain_id, attempt_id, matching)
+        if not self.settings.execution_enabled or self.settings.read_only:
+            raise PolicyError("exit resume is disarmed")
+        if not snapshot.market_is_open:
+            raise PolicyError("exit resume requires an open regular market session")
+        if snapshot.is_flat:
+            self.store.transition_order_chain(
+                chain_id,
+                "UNKNOWN",
+                attempt_id=attempt_id,
+                detail={
+                    "reason": "EMPTY_POSITION_SNAPSHOT_WITHOUT_DURABLE_EXIT_FILL",
+                    "observed_at": snapshot.observed_at.isoformat(),
+                },
+            )
+            self.store.activate_kill_switch(
+                "exit resume saw no position without a durable filled exit",
+                "worker",
+                run_id=run_id,
+                evidence={"client_order_id": client_order_id},
+                activated_at=snapshot.observed_at,
+            )
+            return ExecutionResult(
+                "RISK_OFF",
+                None,
+                None,
+                True,
+                {"position_snapshot_ambiguous": True},
+            )
+        if snapshot.open_orders:
+            raise PolicyError("exit resume found an unrelated open broker order")
+
+        permit = make_system_permit(
+            tool_name="place_option_order",
+            purpose=MutationPurpose.EXIT,
+            intent_id=intent_id,
+            arguments=arguments,
+            now=snapshot.observed_at,
+        )
+        try:
+            wrapper = await self.connection.call_mutation(
+                "place_option_order", arguments, permit=permit, principal="system"
+            )
+            order = _order_data(wrapper)
+        except Exception as exc:
+            order = await self._lookup_by_client_id(client_order_id)
+            if order is None:
+                self.store.transition_order_chain(
+                    chain_id,
+                    "UNKNOWN",
+                    attempt_id=attempt_id,
+                    detail={"error_type": type(exc).__name__, "resume": True},
+                )
+                current = self.store.get_strategy_run(run_id)
+                if current is not None and current["state"] != "RISK_OFF":
+                    self.store.transition_strategy_run(
+                        run_id,
+                        "RISK_OFF",
+                        "AMBIGUOUS_EXIT_RESUME",
+                        {"error_type": type(exc).__name__},
+                    )
+                return ExecutionResult(
+                    "RISK_OFF", None, None, True, {"error_type": type(exc).__name__}
+                )
+        return self._apply_exit_order(run_id, chain_id, attempt_id, order)
+
+    async def resume_replacement(
+        self,
+        *,
+        chain_id: str,
+        intent_id: str,
+        attempt_id: str,
+    ) -> ExecutionResult:
+        """Finish an exact replacement whose attempt was durable pre-crash."""
+
+        chain = self.store.get_order_chain(chain_id)
+        attempt = self.store.latest_order_attempt(chain_id)
+        if (
+            chain is None
+            or chain["intent_id"] != intent_id
+            or chain["state"] != "REPLACEMENT_PENDING"
+            or attempt is None
+            or attempt["attempt_id"] != attempt_id
+        ):
+            raise PolicyError("replacement resume state does not match durable records")
+        arguments = attempt["request"]
+        client_order_id = str(attempt["client_order_id"])
+        if (
+            str(arguments.get("client_order_id") or "") != client_order_id
+            or not arguments.get("order_id")
+            or not arguments.get("limit_price")
+        ):
+            raise PolicyError("replacement resume request is incomplete")
+        if not self.settings.execution_enabled or self.settings.read_only:
+            raise PolicyError("replacement resume is disarmed")
+
+        order = await self._lookup_by_client_id(client_order_id)
+        if order is None:
+            permit = make_system_permit(
+                tool_name="replace_order_by_id",
+                purpose=MutationPurpose.REPRICE,
+                intent_id=intent_id,
+                arguments=arguments,
+            )
+            try:
+                wrapper = await self.connection.call_mutation(
+                    "replace_order_by_id",
+                    arguments,
+                    permit=permit,
+                    principal="system",
+                )
+                order = _order_data(wrapper)
+            except Exception as exc:
+                order = await self._lookup_by_client_id(client_order_id)
+                if order is None:
+                    self.store.transition_order_chain(
+                        chain_id,
+                        "UNKNOWN",
+                        attempt_id=attempt_id,
+                        detail={"error_type": type(exc).__name__, "resume": True},
+                    )
+                    return ExecutionResult(
+                        "UNKNOWN",
+                        None,
+                        None,
+                        True,
+                        {"error_type": type(exc).__name__},
+                    )
+        return self._apply_chain_order(chain_id, attempt_id, order, reconciled=True)
+
+    def _validate_resume_attempt(
+        self,
+        *,
+        run_id: str,
+        intent_id: str,
+        chain_id: str,
+        attempt_id: str,
+        arguments: dict[str, Any],
+        required_chain_state: str,
+    ) -> dict[str, Any]:
+        if not self.store.order_intent_matches(intent_id, arguments):
+            raise PolicyError("resume arguments do not match the durable order intent")
+        chain = self.store.get_order_chain(chain_id)
+        attempt = self.store.latest_order_attempt(chain_id)
+        if (
+            chain is None
+            or chain["run_id"] != run_id
+            or chain["intent_id"] != intent_id
+            or chain["state"] != required_chain_state
+            or attempt is None
+            or attempt["attempt_id"] != attempt_id
+            or attempt["request"] != arguments
+            or attempt["client_order_id"] != arguments.get("client_order_id")
+        ):
+            raise PolicyError("resume state does not match durable order records")
+        return attempt
+
     async def submit_exit(
         self,
         *,
@@ -554,15 +833,51 @@ class ExecutionService:
         if not snapshot.market_is_open:
             raise PolicyError("exit requires an open regular market session")
         if snapshot.is_flat:
-            self.store.transition_strategy_run(
-                run_id, "FLAT", "BROKER_ALREADY_FLAT", {"observed_at": snapshot.observed_at.isoformat()}
+            self.store.activate_kill_switch(
+                "exit start saw no position after prior exposure was observed",
+                "worker",
+                run_id=run_id,
+                evidence={"intent_id": intent_id},
+                activated_at=snapshot.observed_at,
             )
-            return ExecutionResult("FLAT", None, None, False, {"already_flat": True})
+            return ExecutionResult(
+                "RISK_OFF",
+                None,
+                None,
+                False,
+                {"position_snapshot_ambiguous": True},
+            )
 
-        self.store.transition_strategy_run(
-            run_id, "EXIT_SUBMITTING", "MANDATORY_EXIT", {"intent_id": intent_id}
-        )
-        self.store.transition_order_chain(chain_id, "SUBMITTING")
+        run = self.store.get_strategy_run(run_id)
+        chain = self.store.get_order_chain(chain_id)
+        if (
+            run is None
+            or chain is None
+            or chain["run_id"] != run_id
+            or chain["intent_id"] != intent_id
+            or chain["purpose"] != "exit"
+        ):
+            raise PolicyError("exit submission does not match durable run and chain")
+        existing_attempt = self.store.latest_order_attempt(chain_id)
+        if chain["state"] == "PLANNED":
+            if run["state"] != "EXIT_SUBMITTING":
+                self.store.transition_strategy_run(
+                    run_id,
+                    "EXIT_SUBMITTING",
+                    "MANDATORY_EXIT",
+                    {"intent_id": intent_id},
+                )
+            self.store.transition_order_chain(chain_id, "SUBMITTING")
+        elif (
+            chain["state"] == "SUBMITTING"
+            and existing_attempt is None
+            and run["state"] == "EXIT_SUBMITTING"
+        ):
+            # Crash recovery boundary: no durable attempt means mutation dispatch
+            # could not yet have started. Resume the exact persisted request.
+            pass
+        else:
+            raise PolicyError("exit submission state is not safely dispatchable")
         self.store.record_order_attempt(
             attempt_id,
             chain_id=chain_id,
@@ -660,6 +975,21 @@ class ExecutionService:
         self.store.record_order_status(
             chain_id, status, detail=order, attempt_id=attempt_id
         )
+        current_chain = self.store.get_order_chain(chain_id)
+        current_run = self.store.get_strategy_run(run_id)
+        if current_run is None:
+            raise ExecutionError("strategy run disappeared during entry reconciliation")
+        if (
+            status != "filled"
+            and status not in TERMINAL_ZERO_FILL_STATUSES
+            and (
+                (current_chain is not None and current_chain["state"] == "CANCEL_PENDING")
+                or current_run["state"] == "CANCEL_PENDING"
+            )
+        ):
+            return ExecutionResult(
+                "CANCEL_PENDING", status, broker_id, reconciled, order
+            )
         if status == "filled":
             chain_state, run_state = "FILLED", "POSITION_OPEN"
         elif status in TERMINAL_ZERO_FILL_STATUSES:
@@ -674,7 +1004,7 @@ class ExecutionService:
             detail={"reconciled": reconciled},
         )
         current = self.store.get_strategy_run(run_id)
-        if current is None:
+        if current is None:  # pragma: no cover - checked above; retained defensively
             raise ExecutionError("strategy run disappeared during entry reconciliation")
         if current["state"] == "RISK_OFF":
             return ExecutionResult("RISK_OFF", status, broker_id, reconciled, order)
@@ -848,6 +1178,19 @@ def _status(order: dict[str, Any]) -> str:
 def _broker_id(order: dict[str, Any]) -> str | None:
     value = order.get("id")
     return str(value) if value else None
+
+
+def _matching_snapshot_order(
+    orders: tuple[dict[str, Any], ...], client_order_id: str
+) -> dict[str, Any] | None:
+    return next(
+        (
+            order
+            for order in orders
+            if str(order.get("client_order_id") or "") == client_order_id
+        ),
+        None,
+    )
 
 
 def _terminal_chain_state(status: str) -> str:

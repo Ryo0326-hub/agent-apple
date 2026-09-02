@@ -11,12 +11,13 @@ import pytest
 from thetatrap import cli
 from thetatrap.cli import (
     _entry_authorization_confirmation,
+    _entry_authorization_id,
     _find_expected_error,
     _handle_entry_authorization,
     _preflight_entry_authorization,
 )
 from thetatrap.errors import MCPContractError
-from thetatrap.settings import load_settings
+from thetatrap.settings import StrategyProfile, load_settings
 from thetatrap.storage import Store
 
 
@@ -138,6 +139,58 @@ def test_arm_rejects_date_without_verified_event(
     )
 
     with pytest.raises(ValueError, match="no verified event"):
+        _handle_entry_authorization(settings, args, now=NOW)
+    assert store.arm_arguments is None
+
+
+def test_intraday_canary_arm_is_sep3_only_and_expires_at_1045(
+    monkeypatch: pytest.MonkeyPatch, valid_env_file: Path
+) -> None:
+    settings = load_settings(valid_env_file).model_copy(
+        update={"strategy_profile": StrategyProfile.INTRADAY_CANARY}
+    )
+    store = FakeAuthorizationStore()
+    monkeypatch.setattr(cli, "_bound_authorization_store", lambda _: store)
+    strategy_day = date(2026, 9, 3)
+    args = Namespace(
+        action="arm",
+        strategy_date=strategy_day.isoformat(),
+        reason="approved final-day canary",
+        confirm=_entry_authorization_confirmation(settings, strategy_day),
+    )
+
+    result = _handle_entry_authorization(settings, args, now=NOW)
+
+    assert result["entry_authorization"]["state"] == "ARMED"
+    assert store.arm_arguments is not None
+    assert store.arm_arguments["expires_at"].isoformat() == (
+        "2026-09-03T10:45:00-04:00"
+    )
+    assert store.arm_arguments["authorization_id"] == _entry_authorization_id(
+        environment=settings.environment,
+        account_id=settings.expected_account_id,
+        strategy_day=strategy_day,
+        strategy_version="2.0-sep3-canary",
+    )
+
+
+def test_intraday_canary_arm_rejects_any_other_date(
+    monkeypatch: pytest.MonkeyPatch, valid_env_file: Path
+) -> None:
+    settings = load_settings(valid_env_file).model_copy(
+        update={"strategy_profile": StrategyProfile.INTRADAY_CANARY}
+    )
+    store = FakeAuthorizationStore()
+    monkeypatch.setattr(cli, "_bound_authorization_store", lambda _: store)
+    strategy_day = date(2026, 9, 2)
+    args = Namespace(
+        action="arm",
+        strategy_date=strategy_day.isoformat(),
+        reason="wrong date",
+        confirm=_entry_authorization_confirmation(settings, strategy_day),
+    )
+
+    with pytest.raises(ValueError, match="limited to 2026-09-03"):
         _handle_entry_authorization(settings, args, now=NOW)
     assert store.arm_arguments is None
 

@@ -5,13 +5,15 @@ from pathlib import Path
 import pytest
 
 from thetatrap.errors import ConfigurationError
-from thetatrap.settings import load_settings, validate_environment_pair
+from thetatrap.settings import StrategyProfile, load_settings, validate_environment_pair
 
 
 def test_valid_development_settings_are_redacted(valid_env_file: Path) -> None:
     settings = load_settings(valid_env_file)
     summary = settings.redacted_summary()
     assert settings.environment == "development"
+    assert settings.strategy_profile is StrategyProfile.EARNINGS
+    assert summary["strategy_profile"] == "earnings"
     assert summary["alpaca_credentials_present"] is True
     assert summary["featherless_key_present"] is False
     assert "dev-key" not in str(summary)
@@ -22,6 +24,34 @@ def test_valid_development_settings_are_redacted(valid_env_file: Path) -> None:
     )
     assert settings.market_data_status()["stock_feed"] == "iex"
     assert settings.market_data_status()["option_feed"] == "indicative"
+
+
+def test_intraday_canary_profile_is_explicitly_selectable(
+    tmp_path: Path, valid_env_text: str
+) -> None:
+    path = tmp_path / ".env.dev"
+    path.write_text(
+        valid_env_text + "THETATRAP_STRATEGY_PROFILE=intraday_canary\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(path)
+
+    assert settings.strategy_profile is StrategyProfile.INTRADAY_CANARY
+    assert settings.redacted_summary()["strategy_profile"] == "intraday_canary"
+
+
+def test_unknown_strategy_profile_is_rejected(
+    tmp_path: Path, valid_env_text: str
+) -> None:
+    path = tmp_path / ".env.dev"
+    path.write_text(
+        valid_env_text + "THETATRAP_STRATEGY_PROFILE=force_trade\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigurationError, match="earnings.*intraday_canary"):
+        load_settings(path)
 
 
 def test_basic_indicative_feeds_default_when_env_values_are_omitted(

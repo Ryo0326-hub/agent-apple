@@ -1,6 +1,6 @@
 # ThetaTrap
 
-> A bounded, MCP-native AI agent for defined-risk Alpaca paper-options trading around verified earnings events.
+> A bounded, MCP-native AI agent for defined-risk Alpaca paper-options trading, led by a verified-earnings thesis and an explicitly disclosed final-day competition canary.
 
 [Live dashboard](https://104-236-77-186.sslip.io/) · [Hackathon](https://lablab.ai/ai-hackathons/alpaca-ai-trading-agents-hackathon) · [Product requirements](docs/PRD.md) · [Deployment runbook](docs/DEPLOYMENT.md) · [Submission package](docs/SUBMISSION.md)
 
@@ -12,27 +12,30 @@ The result is a paper-trading agent in which Featherless-hosted Qwen investigate
 
 ThetaTrap is a hackathon engineering prototype. It uses Alpaca Basic indicative options data and simulated paper fills. It does **not** demonstrate proven profitability, live-capital safety, or real-time OPRA execution quality.
 
+The earnings strategy remains the primary product. After the official September 1 and 2 runs produced no eligible four-leg candidate, the project added a **September 3-only Intraday Theta Canary** to test the same MCP/Qwen/execution architecture on liquid index ETFs. This is an adaptive competition profile, not a hidden rule change and not a generic fallback that activates whenever an earnings scan fails.
+
 ## At a glance
 
 | Item | Current design |
 | --- | --- |
 | Trading environment | Alpaca paper trading only |
 | Market data | Alpaca Basic indicative options data; IEX underlying quotes |
-| Event universe | 7 eligible events; 2 deliberately excluded |
-| Daily search | Up to 2 ranked candidates reviewed sequentially |
+| Primary profile | Verified earnings; 7 eligible events and 2 deliberate exclusions |
+| Sep 3 canary | QQQ/SPY, September 4 expiry, same-day entry and exit |
+| Candidate review | Up to 2 ranked candidates per scan; eligible Sep 3 Qwen review cycles are at least 5 minutes apart |
 | Broker exposure | 1 initial broker entry attempt per strategy date; at most 1 filled position |
-| Structure | 1-contract, four-leg iron condor |
-| Maximum loss | Lower of `$500` or `0.5%` of observed equity |
+| Structure | 1-contract, four-leg, defined-risk iron condor |
+| Maximum loss | Earnings: lower of `$500` or `0.5%` of equity; canary: at most `$80` |
 | AI | `Qwen/Qwen3-Coder-Next`, with `Qwen/Qwen3-32B` fallback |
 | Alpaca boundary | Official `alpaca-mcp-server==2.3.0` only |
-| Verification baseline | 220 automated tests passing |
-| Competition result | Sep 1 interim: 176 candidate evaluations, 0 broker order attempts, 0 fills, `$100,000` equity; Sep 2 pending |
+| Verification baseline | Automated unit, integration, replay, and public-boundary suite |
+| Official results through Sep 2 | 314 evaluations, 0 eligible candidates, 0 orders, 0 fills, `$100,000` equity |
 
 The competition feed combination is an explicit fail-closed profile, not an
 implicit SDK default. See the [competition market-data profile](docs/COMPETITION_DATA_PROFILE.md)
 for its exact environment values, audit metadata, and limitations.
 
-**LIVE NOW:** the [public read-only competition dashboard](https://104-236-77-186.sslip.io/) is running from `v1.1.0-hackathon`. Add the demo video, final report, and LabLab project page after the competition result is available.
+**LIVE NOW:** the [public read-only competition dashboard](https://104-236-77-186.sslip.io/) reports its deployed Git SHA, current strategy profile, complete scan history, Qwen/MCP activity, orders, fills, equity, and kill-switch state. Add the demo video, final report, and LabLab project page after the competition result is frozen.
 
 ## How the strategy works
 
@@ -41,9 +44,9 @@ for its exact environment values, audit metadata, and limitations.
 3. **Construct one bounded candidate.** Deterministic code searches outward from the expected-move thresholds for the nearest fully liquid short pair, then computes the exact four legs, credit, wing width, and maximum loss. Missing Basic-feed data never becomes an assumed value.
 4. **Let the AI investigate.** For an eligible candidate, Qwen calls approved account, market, order, position, and news tools. It may veto a finite event risk or issue the exact pre-authorized order call. When every candidate fails deterministic gates, a separate read-only Qwen advisory explains the best rejection but cannot authorize a trade.
 5. **Recheck before dispatch.** A policy gateway refreshes broker state and quotes, rejects any changed argument, consumes a date/account-bound one-shot authorization, and forwards at most one initial entry attempt for that strategy date.
-6. **Manage the lifecycle.** Deterministic code reconciles ambiguous timeouts, reprices or cancels the same logical order chain, monitors positions, and submits the complete opposite-side exit the next morning.
+6. **Manage the lifecycle.** Deterministic code reconciles ambiguous timeouts, reprices or cancels the same logical order chain, monitors positions, and submits the complete opposite-side exit at the profile's fixed time: next morning for earnings, same afternoon for the Sep 3 canary.
 
-An iron condor sells one put spread and one call spread around the expected earnings move. The received credit is the maximum possible profit; the wings define the maximum possible loss. ThetaTrap trades only one contract and never sells a naked option.
+An iron condor sells one put spread and one call spread around the underlying. The earnings profile places the shorts beyond its expected-move threshold; the canary ranks exact `$1`-wing structures around spot by complete quote quality. The received credit is the maximum possible profit and the wings define maximum possible loss. ThetaTrap trades only one contract and never sells a naked option.
 
 ## What makes it an AI agent
 
@@ -54,7 +57,12 @@ The model cannot choose the symbol universe, expiration, strikes, quantity, limi
 ```mermaid
 flowchart LR
     W[60-second worker] --> S[Schedule and persisted state]
-    S --> M[Official Alpaca MCP server]
+    S --> F{Date-scoped profile}
+    F -->|Sep 1–2| E[Earnings ThetaTrap]
+    F -->|Sep 3 only| C[Intraday Theta Canary]
+    E --> M
+    C --> M
+    M[Official Alpaca MCP server]
     M --> D[Account, clock, news, quotes, chains]
     D --> G[Deterministic strategy and risk gates]
     G -->|eligible| Q[Featherless Qwen execution review]
@@ -76,9 +84,31 @@ flowchart LR
 | September 1, 2026 | PANW, MDB, CRDO, GTLB | DELL — `RELEASE_TIME_AMBIGUOUS` |
 | September 2, 2026 | AVGO, SNOW, AI | NTAP — `REQUIRED_WEEKLY_EXPIRATIONS_UNAVAILABLE` |
 
-Up to two eligible candidates may be reviewed sequentially on a strategy date. A veto or deterministic failure before broker dispatch may advance to the next candidate. Once the single initial broker entry attempt is dispatched, ThetaTrap cannot start another candidate that date, even if the order receives no fill. Repricing remains part of that same logical order chain.
+For the earnings profile, up to two eligible candidates may be reviewed sequentially on a strategy date. The Sep 3 canary may reassess QQQ and SPY while its one-hour window remains open, but eligible Qwen review cycles are deterministically spaced at least five minutes apart. A veto or deterministic failure before broker dispatch may therefore be reconsidered on newer evidence. Once the single initial broker entry attempt is dispatched, ThetaTrap cannot start another candidate that date, even if the order receives no fill. Repricing remains part of that same logical order chain.
 
 The first-party announcements and exclusion evidence are recorded in [docs/EVENT_SOURCES.md](docs/EVENT_SOURCES.md).
+
+## Sep 3 adaptive competition profile
+
+September 1 and 2 showed that the cloud agent and safety lifecycle worked, but the Alpaca Basic feed repeatedly failed the prerequisites for an earnings condor. The worker completed **176** scheduled candidate evaluations on September 1 and **138** on September 2. No candidate passed all deterministic gates, so Qwen received no executable candidate and the system correctly placed no order. The recurring constraints were non-consolidated underlying quotes, stale or missing open-interest dates, and invalid, stale, or wide quotes across the four required option legs.
+
+The **Intraday Theta Canary** is the documented response for September 3 only:
+
+| Control | Frozen value |
+| --- | --- |
+| Universe | QQQ and SPY, ranked by complete live quote quality; post-close diagnostics favored QQQ |
+| Expiration | September 4, 2026 (one day to expiry) |
+| Entry | 09:45–10:45 ET; unresolved entry canceled by 10:50 |
+| Exit | Start 15:15; full-wing limit at 15:25; target broker-flat by 15:45 |
+| Structure | One symmetric `$1`-wide iron condor, one contract |
+| Credit and loss | Minimum `$0.20` credit; maximum defined loss `$80` |
+| Quote evidence | Underlying age `<=10s` and spread `<=0.20%`; option age `<=60s`; shorts `<=min($1, 25%)`, wings `<=min($1, 50%)` |
+| Open interest | Numeric; shorts `>=500`, wings `>=100`; date no more than three prior trading sessions old |
+| Qwen cadence | Review both ranked candidates at most once per 5-minute cycle; hard 90-second/10-turn/12-tool-call limit per candidate |
+
+The profile changes the source of the opportunity, not the responsibility boundary. Deterministic code still ranks the universe, chooses every leg and number, and performs the same fresh policy recheck. Qwen still must call bounded Alpaca MCP reads and either veto or issue the exact immutable entry call. Entry remains one-shot and the exit remains deterministic.
+
+This profile is **not** an always-on backup strategy and is not automatically selected after a rejected earnings scan. It is date-scoped, separately authorized, visibly labeled in the dashboard, and should be evaluated as an execution experiment rather than evidence of a validated edge. A profit, loss, unfilled order, or veto will all be reported as observed.
 
 ## Safety and reliability boundaries
 
@@ -104,11 +134,18 @@ The first-party announcements and exclusion evidence are recorded in [docs/EVENT
 
 ## Evidence and current status
 
-The deployed `v1.1.0-hackathon` release passes **220 automated tests**. A credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed, and the disarmed preflight confirmed an active, flat `$100,000` paper account with options level 3. On September 1, the official worker recorded 176 deterministic candidate evaluations across PANW, MDB, CRDO, and GTLB. No structure passed every hard gate, so it made zero broker order attempts and zero fills; the account remained flat at `$100,000`. Tuesday's separately labeled Qwen advisory completed all six read-only MCP calls but failed strict final-response validation, which the dashboard reports as `FAILED`; it did not change the no-trade result. Cloud restart recovery preserved the same database and zero order attempts. The testing account remains stopped/disarmed and is used only for local fixtures and replay.
+The deployed baseline passed the automated suite and a credentialed competition-account smoke run inside the DigitalOcean image completed all five official MCP reads through Qwen with zero mutation tools exposed. Preflight confirmed an active, flat `$100,000` paper account with options level 3.
+
+- **September 1:** 176 deterministic evaluations across PANW, MDB, CRDO, and GTLB; zero eligible candidates, order attempts, or fills.
+- **September 2:** 138 deterministic evaluations across AVGO, SNOW, and AI; zero eligible candidates, order attempts, or fills. The separately labeled Qwen advisory completed six official read-only MCP calls and confirmed that no qualitative context could override the deterministic rejection.
+- **Observed account result through September 2:** flat, zero open orders, and `$100,000` equity.
+- **September 3:** the Intraday Theta Canary is the date-scoped final competition profile. Its actual decision, order, fill, exit, and P&L must come from the public dashboard and final report; this README does not pre-claim an outcome.
+
+Cloud restart recovery preserved the same database and zero duplicate order attempts. The testing account remains stopped/disarmed and is used only for local fixtures and replay.
 
 Do not read a zero-trade replay or an unchanged account as profitability evidence. Final claims must come from the submitted competition account's timestamped equity and order history. See the sanitized [replay summary](evidence/replay-summary.md) and [release validation summary](evidence/validation-summary.md). Credentials, SQLite databases, and raw worker logs do not belong in public evidence.
 
-Submission collateral: [one-page PDF](docs/submission/ThetaTrap-One-Page.pdf) · [six-slide PDF](docs/submission/ThetaTrap-Hackathon-Deck.pdf) · [editable PowerPoint](docs/submission/ThetaTrap-Hackathon-Deck.pptx)
+Pivot-aware collateral sources: [one-page write-up](docs/ONE_PAGER.md) · [six-slide deck](docs/PITCH_DECK.md) · [demo script](docs/DEMO_VIDEO.md). The binary PDFs/PPTX under `docs/submission/` are pre-result drafts and must be regenerated after the September 3 broker outcome is frozen.
 
 ## Quick start
 
@@ -202,6 +239,8 @@ evidence/            sanitized, judge-readable run evidence only
 - Basic indicative options data is not consolidated OPRA data.
 - Alpaca paper fills omit important live-market effects and cannot prove executable profitability.
 - The event universe and expirations are intentionally frozen for one competition week.
+- The Sep 3 canary was selected after observing two no-trade days and has not been backtested as a standalone strategy.
+- A same-day paper round trip can create nonzero P&L, but its sign is uncertain and neither outcome validates expected value.
 - One official competition result cannot establish long-run expected value.
 - Abnormal broken-position liquidation remains a manual broker operation.
 - The system has not been approved for live capital.

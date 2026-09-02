@@ -98,13 +98,15 @@ ORDER_CHAIN_TRANSITIONS: dict[str, frozenset[str]] = {
             "PENDING",
             "PARTIALLY_FILLED",
             "CANCEL_PENDING",
+            "CANCELED",
             "FILLED",
             "REJECTED",
+            "EXPIRED",
             "ERROR",
         }
     ),
     "UNKNOWN": frozenset(
-        {"PENDING", "PARTIALLY_FILLED", "CANCEL_PENDING", "CANCELED", "FILLED", "REJECTED", "ERROR"}
+        {"PENDING", "PARTIALLY_FILLED", "CANCEL_PENDING", "CANCELED", "FILLED", "REJECTED", "EXPIRED", "ERROR"}
     ),
     "PENDING": frozenset(
         {
@@ -119,13 +121,13 @@ ORDER_CHAIN_TRANSITIONS: dict[str, frozenset[str]] = {
         }
     ),
     "PARTIALLY_FILLED": frozenset(
-        {"CANCEL_PENDING", "REPLACEMENT_PENDING", "CANCELED", "FILLED", "ERROR"}
+        {"CANCEL_PENDING", "REPLACEMENT_PENDING", "CANCELED", "FILLED", "REJECTED", "EXPIRED", "ERROR"}
     ),
     "CANCEL_PENDING": frozenset(
         {"PARTIALLY_FILLED", "CANCELED", "FILLED", "REJECTED", "EXPIRED", "ERROR"}
     ),
     "REPLACEMENT_PENDING": frozenset(
-        {"SUBMITTING", "UNKNOWN", "PENDING", "PARTIALLY_FILLED", "CANCELED", "FILLED", "REJECTED", "ERROR"}
+        {"SUBMITTING", "UNKNOWN", "PENDING", "PARTIALLY_FILLED", "CANCELED", "FILLED", "REJECTED", "EXPIRED", "ERROR"}
     ),
     "ERROR": frozenset({"UNKNOWN", "CANCEL_PENDING", "REPLACEMENT_PENDING"}),
     "CANCELED": frozenset(),
@@ -878,6 +880,10 @@ class Store:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             self._assert_metadata_identity_locked(connection, environment, account_id)
+            if self._kill_switch_enabled_locked(connection):
+                raise StorageInvariantError(
+                    "kill switch blocks entry authorization"
+                )
             existing_by_id = connection.execute(
                 "SELECT * FROM entry_authorizations WHERE authorization_id=?",
                 (authorization_id,),
@@ -1949,6 +1955,19 @@ class Store:
             ).fetchall()
         return [_agent_tool_dict(row) for row in rows]
 
+    def latest_agent_run_for_strategy(self, run_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM agent_runs
+                WHERE run_id=?
+                ORDER BY started_at DESC, agent_run_id DESC
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        return _agent_run_dict(row) if row is not None else None
+
     def start_advisory_run(
         self,
         advisory_run_id: str,
@@ -2948,6 +2967,15 @@ class Store:
                 ).fetchone(),
                 "runtime controls",
             )
+            revoked = connection.execute(
+                """
+                UPDATE entry_authorizations
+                SET state='REVOKED', revoked_at=?, revoked_by=?, revoke_reason=?
+                WHERE state='ARMED'
+                """,
+                (when, requested_by, f"kill switch: {reason}"),
+            )
+            revoked_count = int(revoked.rowcount)
             if not bool(control["kill_switch_enabled"]):
                 version = int(control["version"]) + 1
                 connection.execute(
@@ -2973,7 +3001,18 @@ class Store:
                         version, created_at
                     ) VALUES ('kill_switch', 1, ?, ?, ?, ?, ?)
                     """,
-                    (reason, requested_by, _audit_json(evidence or {}), version, when),
+                    (
+                        reason,
+                        requested_by,
+                        _audit_json(
+                            {
+                                **(evidence or {}),
+                                "revoked_authorization_count": revoked_count,
+                            }
+                        ),
+                        version,
+                        when,
+                    ),
                 )
             if run_id is not None:
                 run = _required_row(

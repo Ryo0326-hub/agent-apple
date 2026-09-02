@@ -10,11 +10,12 @@ from typing import Any, AsyncContextManager, Callable
 
 from thetatrap.errors import PolicyError
 from thetatrap.events import load_events
+from thetatrap.intraday import INTRADAY_STRATEGY_VERSION, IntradayStrategyConfig
 from thetatrap.mcp.client import MCPConnection, open_alpaca_mcp
 from thetatrap.orders import serialize_for_storage
 from thetatrap.policy import payload_hash
 from thetatrap.runtime import ThetaTrapRuntime
-from thetatrap.settings import RuntimeSettings, account_suffix
+from thetatrap.settings import RuntimeSettings, StrategyProfile, account_suffix
 from thetatrap.storage import Store
 
 
@@ -64,15 +65,27 @@ async def run_decision_rehearsal(
     settings.require_featherless_credentials()
     observed_at = (now or datetime.now(UTC)).astimezone(UTC)
     events = load_events()
-    requested_events = tuple(
-        event
-        for event in events.events
-        if event.status == "verified" and event.event_date == strategy_date
-    )
-    if not requested_events:
-        raise PolicyError(
-            "decision rehearsal date has no verified event in frozen configuration"
+    if settings.strategy_profile is StrategyProfile.INTRADAY_CANARY:
+        intraday_policy = IntradayStrategyConfig()
+        if strategy_date != intraday_policy.trade_date:
+            raise PolicyError(
+                "intraday_canary decision rehearsal is limited to 2026-09-03"
+            )
+        requested_events = ()
+        strategy_symbols = list(intraday_policy.allowed_symbols)
+        strategy_version = INTRADAY_STRATEGY_VERSION
+    else:
+        requested_events = tuple(
+            event
+            for event in events.events
+            if event.status == "verified" and event.event_date == strategy_date
         )
+        if not requested_events:
+            raise PolicyError(
+                "decision rehearsal date has no verified event in frozen configuration"
+            )
+        strategy_symbols = [event.symbol for event in requested_events]
+        strategy_version = events.strategy_version
 
     with tempfile.TemporaryDirectory(prefix="thetatrap-decision-rehearsal-") as folder:
         database_path = Path(folder) / "rehearsal.sqlite3"
@@ -92,11 +105,18 @@ async def run_decision_rehearsal(
                 events=events,
             )
             before = await runtime.execution.read_broker_snapshot(now=observed_at)
-            result = await runtime.rehearse_entry(
-                before,
-                observed_at,
-                strategy_date=strategy_date,
-            )
+            if settings.strategy_profile is StrategyProfile.INTRADAY_CANARY:
+                result = await runtime.rehearse_intraday_entry(
+                    before,
+                    observed_at,
+                    strategy_date=strategy_date,
+                )
+            else:
+                result = await runtime.rehearse_entry(
+                    before,
+                    observed_at,
+                    strategy_date=strategy_date,
+                )
             after = await runtime.execution.read_broker_snapshot()
 
             before_orders = _fingerprint(before.open_orders)
@@ -119,7 +139,7 @@ async def run_decision_rehearsal(
             run = store.find_strategy_run(
                 environment="replay",
                 strategy_date=strategy_date.isoformat(),
-                strategy_version=events.strategy_version,
+                strategy_version=strategy_version,
             )
             if run is None:
                 raise PolicyError("decision rehearsal did not create its ephemeral run")
@@ -142,6 +162,8 @@ async def run_decision_rehearsal(
                 "mode": "EPHEMERAL_LIVE_READ_REHEARSAL",
                 "requested_strategy_date": strategy_date.isoformat(),
                 "observed_at": observed_at.isoformat(),
+                "strategy_profile": settings.strategy_profile.value,
+                "strategy_symbols": strategy_symbols,
                 "event_symbols": [event.symbol for event in requested_events],
                 "account_suffix": account_suffix(str(before.account["id"])),
                 "market_is_open": before.market_is_open,

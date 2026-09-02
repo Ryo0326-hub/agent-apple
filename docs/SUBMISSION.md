@@ -16,9 +16,11 @@ The team—not the judges—runs the worker against the submitted paper-account 
 - Alpaca Basic indicative options data and IEX underlying quotes.
 - Seven eligible events: PANW, MDB, CRDO, GTLB, AVGO, SNOW, and AI.
 - Two exclusions: DELL (`RELEASE_TIME_AMBIGUOUS`) and NTAP (`REQUIRED_WEEKLY_EXPIRATIONS_UNAVAILABLE`).
-- Up to two ranked candidates may be reviewed sequentially before broker dispatch.
+- Official September 1–2 evidence: 314 deterministic evaluations, zero eligible candidates, zero broker order attempts, zero fills, and `$100,000` equity.
+- One separately disclosed September 3-only Intraday Theta Canary: QQQ/SPY, September 4 expiry, `$1` symmetric wings, one contract, minimum `$0.20` credit, and at most `$80` defined loss.
+- Each scan ranks at most QQQ and SPY; eligible Sep 3 Qwen review cycles are at least five minutes apart before broker dispatch.
 - One initial broker entry attempt is allowed per strategy date; at most one filled position.
-- One contract; maximum loss is the lower of `$500` or `0.5%` of observed equity.
+- One contract; earnings maximum loss is the lower of `$500` or `0.5%` of observed equity, while the Sep 3 canary cap is `$80`.
 - No proven-profitability or live-capital claim.
 
 ## Account separation
@@ -33,11 +35,11 @@ The team—not the judges—runs the worker against the submitted paper-account 
 
 ## Software release gates
 
-- [x] Integrated suite passes: 220 automated tests.
+- [x] Integrated automated suite passes: 316 tests on the final Sep 3 release revision.
 - [x] Five-scenario replay completes with zero external broker mutations.
 - [x] Official `alpaca-mcp-server==2.3.0` and the committed required-tool schema hash are pinned.
 - [x] Real Featherless Qwen probe completed five official MCP reads, exposed zero mutation tools, and returned structured `READY`.
-- [ ] The first competition-account MLEG attempt is observed as the controlled live canary and remains under the one-shot lifecycle.
+- [ ] Any September 3 MLEG attempt is observed as the controlled live canary and remains under the one-shot lifecycle.
 - [x] Testing and competition env-pair validation proves different account IDs, Alpaca key pairs, and database paths.
 - [x] Competition read-only preflight verifies account suffix, ACTIVE status, level 3, `$100,000` equity, flat positions, zero open orders, clock, and MCP schema.
 - [ ] One date/account/environment-bound entry authorization is recorded before startup and after consumption, revocation, or expiry.
@@ -64,6 +66,7 @@ The team—not the judges—runs the worker against the submitted paper-account 
 - [x] Public judge dashboard is status-only, has no mutation route, and uses a read-only data mount or snapshot.
 - [x] Public dashboard container has no Alpaca or Featherless credentials.
 - [x] Public page shows paper/basic-indicative labels, worker freshness, candidate/decision state, position state, and official account outcome.
+- [x] Public page explains the original earnings thesis, Sep 1–2 no-trade evidence, Basic-feed root cause, explicit Sep 3 pivot, active profile, AI/deterministic split, and unified action history.
 - [x] Public page auto-refreshes and shows a stale-data warning when the worker heartbeat ages out.
 - [x] HTTPS URL works in a signed-out browser on desktop and mobile.
 - [x] Kill-switch state may be visible publicly, but activation and clearing controls exist only in the private operator surface.
@@ -97,13 +100,13 @@ Do this only after the competition worker has reconciled the account.
 ## Demo sequence
 
 1. Show the paper/basic-indicative banner, environment, worker freshness, and pinned MCP session.
-2. Explain the seven eligible and two excluded events.
-3. Show the deterministic candidate, expected move, IV ratio, four legs, credit, and maximum loss.
-4. Show Qwen calling approved official MCP and local tools, then vetoing or issuing the exact order call.
-5. Show the one-shot authorization, exact-intent check, fresh policy recheck, and single entry order chain.
-6. Show deterministic reconciliation, cancellation/repricing, and next-morning exit.
-7. Show final flat positions, open orders, account equity, and report digest.
-8. Show timeout and kill-switch behavior; label replay scenarios as simulation.
+2. Explain the original earnings thesis and the seven eligible/two excluded events.
+3. Show the September 1–2 evidence: 314 scans, no eligible candidate, no broker order, unchanged equity, and the dominant Basic-feed failures.
+4. Explain the Sep 3-only canary and why it is a transparent adaptation rather than an automatic fallback or proven edge.
+5. Show the deterministic candidate and frozen profile: QQQ/SPY ranking, four legs, credit, `$1` wings, and at most `$80` loss.
+6. Show Qwen calling approved official MCP and local tools, then vetoing or issuing the exact order call.
+7. Show the one-shot authorization, exact-intent check, fresh policy recheck, single entry chain, same-day exit, and broker-flat reconciliation.
+8. Show final positions, open orders, account equity, report digest, and honest result label; identify replay scenarios as simulation.
 
 ## Claims boundary
 

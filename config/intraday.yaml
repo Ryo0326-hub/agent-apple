@@ -1,0 +1,71 @@
+strategy_name: "Intraday Theta Canary"
+strategy_version: "2.0-sep3-canary"
+profile_id: "sep3_intraday_theta_canary_v1"
+profile_kind: "final_day_intraday_contingency"
+timezone: "America/New_York"
+trade_date: "2026-09-03"
+expiration: "2026-09-04"
+
+# This is a separately labelled competition contingency, not an earnings trade.
+# It exists because the Sep 1-2 earnings profile produced no eligible structure
+# with Alpaca Basic indicative option data. It must not be presented as a
+# validated or profitable strategy.
+activation_reason: >-
+  The earnings-event profile remained safely flat after its deterministic
+  liquidity gates rejected every candidate under Alpaca Basic indicative data.
+  This one-day profile seeks one bounded intraday paper round trip instead.
+
+universe:
+  - QQQ
+  - SPY
+
+entry_window:
+  start: "09:45"
+  stop_new_orders: "10:45"
+  cancel_all_unfilled: "10:50"
+exit_window:
+  start: "15:15"
+  aggressive_limit: "15:25"
+  broker_flat_deadline: "15:45"
+
+structure:
+  name: "one_dollar_symmetric_iron_condor"
+  quantity: 1
+  wing_width: "1.00"
+  minimum_proposed_credit: "0.20"
+  maximum_loss_dollars: "80.00"
+
+market_data_policy:
+  stock_feed: "iex"
+  options_feed: "indicative"
+  maximum_underlying_age_seconds: 10
+  maximum_option_age_seconds: 60
+  maximum_future_quote_skew_seconds: 2
+  maximum_underlying_spread_fraction: "0.002"
+  maximum_short_spread_dollars: "1.00"
+  maximum_short_spread_fraction: "0.25"
+  maximum_wing_spread_dollars: "1.00"
+  maximum_wing_spread_fraction: "0.50"
+  minimum_short_open_interest: 500
+  minimum_wing_open_interest: 100
+  accepted_open_interest_dates:
+    - "2026-09-02"
+    - "2026-09-01"
+    - "2026-08-31"
+  open_interest_note: >-
+    Numeric open interest is mandatory. The profile accepts only the three
+    prior trading sessions; missing values are never accepted.
+
+decision_boundary:
+  deterministic_host: >-
+    Filters data, selects the exact strikes, fixes quantity and maximum loss,
+    constructs the immutable order, and controls all exits.
+  qwen: >-
+    Reviews the bounded candidate with official Alpaca MCP evidence and may
+    submit only the exact authorized entry or veto it.
+
+disclosures:
+  - "Paper trading only."
+  - "Alpaca Basic indicative options data is not consolidated OPRA data."
+  - "This final-day contingency has not established a profitable edge."
+  - "A completed round trip may realize either a profit or a loss."

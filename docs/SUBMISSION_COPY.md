@@ -8,17 +8,17 @@ ThetaTrap — A Bounded MCP-Native AI Options Agent
 
 ## Short description
 
-ThetaTrap uses Qwen and Alpaca’s official MCP server to evaluate earnings risk and execute defined-risk paper options trades inside deterministic safety limits.
+ThetaTrap uses Qwen and Alpaca’s official MCP server to evaluate bounded options candidates and execute paper trades inside deterministic safety limits.
 
-## Long description (168 words including the result placeholder; final replacement must remain at most 180)
+## Long description (final replacement must remain between 100 and 180 words)
 
-ThetaTrap is a bounded Alpaca paper-options agent inspired by a YouTube idea: earnings can make premium expensive, so a defined-risk structure may benefit when volatility falls. Autonomy adds harder problems: stale quotes, inconsistent four-leg data, drifting model output, and ambiguous order timeouts.
+ThetaTrap is a bounded Alpaca paper-options agent inspired by a YouTube idea about collecting expensive earnings premium with defined risk. Featherless-hosted Qwen calls approved Alpaca MCP tools and may veto a candidate or issue only the exact pre-authorized order. Deterministic Python chooses every leg and number, enforces one contract and one broker entry attempt, rechecks live evidence, reconciles timeouts, and controls the exit.
 
-ThetaTrap therefore separates judgment from control. The frozen universe has seven eligible events and two explicit exclusions, DELL and NTAP. Featherless-hosted Qwen calls approved tools to inspect eligible opportunities and can veto risky event context. Deterministic Python builds one-contract iron condors, caps maximum loss at the lower of $500 or 0.5% of equity, and allows one broker entry attempt per strategy date after reviewing up to two candidates sequentially. Every Alpaca read and order uses the official MCP server. A persistent worker handles reconciliation, cancellation, and next-morning exit.
+After 314 earnings evaluations on September 1–2 produced no valid four-leg candidate under Alpaca Basic indicative data, ThetaTrap added a transparent September 3-only canary: QQQ/SPY, September 4 expiry, exact $1 wings, minimum $0.20 credit, maximum $80 loss, and a same-day exit. It is not an automatic fallback or a proven edge.
 
 [PRE-SUBMISSION RESULT: insert filled-trade count, final equity, realized P&L, and final-report URL; if no trade filled, state that exactly.]
 
-ThetaTrap uses Alpaca Basic indicative data and simulated paper fills. It does not demonstrate proven profitability or live-capital readiness.
+The public dashboard shows the thesis, failed gates, pivot, Qwen tool trace, orders, fills, and equity. This is paper trading, not proof of profitability or live-capital readiness.
 
 ## Suggested tags
 

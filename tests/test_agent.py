@@ -176,7 +176,38 @@ async def test_finite_veto_is_recorded(valid_env_file) -> None:
         "explanation": "Current evidence reports a halt.",
         "evidence": ["timestamped item"],
     }
-    client = FakeClient([response([tool_call("record_candidate_rejection", rejection, 1)])])
+    client = FakeClient(
+        [
+            read_response(),
+            response([tool_call("record_candidate_rejection", rejection, 99)]),
+        ]
+    )
     decision = await QwenAgent(load_settings(valid_env_file), tools, client=client).review(context())
     assert decision.outcome == AgentOutcome.VETO
-    assert tools.calls == [("record_candidate_rejection", rejection)]
+    assert tools.calls[-1] == ("record_candidate_rejection", rejection)
+
+
+@pytest.mark.asyncio
+async def test_early_veto_is_rejected_until_required_reads_complete(valid_env_file) -> None:
+    tools = FakeTools()
+    rejection = {
+        "reason_code": "TRADING_HALT",
+        "explanation": "Current evidence reports a halt.",
+        "evidence": ["timestamped item"],
+    }
+    client = FakeClient(
+        [
+            response([tool_call("record_candidate_rejection", rejection, 1)]),
+            read_response(),
+            response([tool_call("record_candidate_rejection", rejection, 99)]),
+        ]
+    )
+
+    decision = await QwenAgent(
+        load_settings(valid_env_file), tools, client=client
+    ).review(context())
+
+    assert decision.outcome == AgentOutcome.VETO
+    assert tools.calls.count(("record_candidate_rejection", rejection)) == 1
+    assert decision.trace[0].status == "rejected_missing_evidence"
+    assert decision.trace[-1].status == "recorded"

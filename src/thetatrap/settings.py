@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
@@ -18,6 +19,13 @@ from thetatrap.errors import ConfigurationError
 
 
 EnvironmentName = Literal["development", "competition", "replay"]
+
+
+class StrategyProfile(StrEnum):
+    """Explicit runtime strategy selection; earnings remains the safe default."""
+
+    EARNINGS = "earnings"
+    INTRADAY_CANARY = "intraday_canary"
 
 REQUIRED_MCP_TOOLSETS = (
     "account",
@@ -60,6 +68,10 @@ class RuntimeSettings(BaseSettings):
         ge=10,
         le=300,
         validation_alias="THETATRAP_WORKER_INTERVAL_SECONDS",
+    )
+    strategy_profile: StrategyProfile = Field(
+        default=StrategyProfile.EARNINGS,
+        validation_alias="THETATRAP_STRATEGY_PROFILE",
     )
 
     alpaca_api_key: SecretStr = Field(validation_alias="ALPACA_API_KEY")
@@ -177,6 +189,7 @@ class RuntimeSettings(BaseSettings):
             "database_path": str(self.database_path),
             "read_only": self.read_only,
             "execution_enabled": self.execution_enabled,
+            "strategy_profile": self.strategy_profile.value,
             "alpaca_paper_trade": self.alpaca_paper_trade,
             "alpaca_toolsets": self.alpaca_toolsets,
             "market_data_profile": self.market_data_status(),

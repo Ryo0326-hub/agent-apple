@@ -66,6 +66,15 @@ def build_operational_report(
         last_run = runs[0] if runs else None
         focus_run = current_run or last_run
         focus_run_id = str(focus_run["run_id"]) if focus_run else None
+        focus_context = _mapping(focus_run.get("context") if focus_run else None)
+        focus_structure = _mapping(focus_context.get("structure"))
+        focus_profile = _as_string(focus_context.get("strategy_profile")) or "earnings"
+        focus_name = _as_string(focus_context.get("strategy_name")) or (
+            "ThetaTrap earnings iron condor"
+        )
+        maximum_defined_loss = (
+            _as_string(focus_structure.get("maximum_loss_dollars")) or "500.00"
+        )
         transitions = _strategy_transitions(connection, tables, focus_run_id)
         transition_history = _all_strategy_transitions(connection, tables)
         candidates, selected_candidate, latest_gates = _candidate_summary(
@@ -137,6 +146,9 @@ def build_operational_report(
             "kill_switch": kill_switch,
             "one_shot_entry": one_shot_entry,
             "strategy": {
+                "focus_profile": focus_profile,
+                "focus_name": focus_name,
+                "focus_context": focus_context,
                 "current_run": current_run,
                 "last_run": last_run,
                 "focus_run_id": focus_run_id,
@@ -160,7 +172,7 @@ def build_operational_report(
                 "entry_permissions": entry_permission_history,
                 "paper_only": True,
                 "read_only_viewer": True,
-                "maximum_defined_loss": "500.00",
+                "maximum_defined_loss": maximum_defined_loss,
                 "maximum_contracts": 1,
                 "equity_kill_threshold": "99000.00",
             },
@@ -252,6 +264,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
         "",
         "## Outcome",
         "",
+        f"- Strategy profile: `{_md(strategy.get('focus_profile', 'earnings'))}`",
+        f"- Strategy name: `{_md(strategy.get('focus_name', 'ThetaTrap earnings iron condor'))}`",
         f"- Strategy state: `{_md(focus_run.get('state', 'NOT_STARTED'))}`",
         f"- Strategy run: `{_md(focus_run.get('run_id', 'none'))}`",
         f"- No-trade reason: `{_md(strategy.get('no_trade_reason') or 'none')}`",

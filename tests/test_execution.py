@@ -109,7 +109,7 @@ class FakeConnection:
             data = {"result": self.positions}
         elif name == "get_account_activities":
             data = {"result": self.activities}
-        elif name == "get_order_by_client_id" and self.reconciled_status:
+        elif name in {"get_order_by_client_id", "get_order_by_id"} and self.reconciled_status:
             data = {"id": "broker-order-1", "status": self.reconciled_status}
         else:
             raise RuntimeError("not found")
@@ -121,7 +121,10 @@ class FakeConnection:
             raise TimeoutError("ambiguous")
         return {
             "_alpaca_mcp_security": {"trust": "untrusted_tool_output"},
-            "data": {"id": "broker-order-1", "status": self.mutation_status},
+            "data": {
+                "id": f"broker-order-{self.mutations}",
+                "status": self.mutation_status,
+            },
         }
 
 
@@ -439,3 +442,297 @@ async def test_filled_initial_and_reconciled_exit_wait_for_position_confirmation
     assert reconciled.detail["awaiting_position_reconciliation"] is True
     assert store.get_order_chain("exit-chain")["state"] == "FILLED"
     assert store.get_strategy_run("run-1")["state"] == "EXIT_PENDING"
+
+
+@pytest.mark.asyncio
+async def test_consumed_entry_submission_resumes_with_same_client_id(
+    tmp_path, valid_env_file
+) -> None:
+    connection = FakeConnection()
+    service, store, arguments = setup_runtime(tmp_path, valid_env_file, connection)
+    authorization = store.get_entry_authorization(
+        environment="development",
+        account_id="account-uuid",
+        strategy_date="2026-09-01",
+    )
+    assert authorization is not None
+    store.begin_authorized_entry_submission(
+        authorization["authorization_id"],
+        environment="development",
+        account_id="account-uuid",
+        strategy_date="2026-09-01",
+        run_id="run-1",
+        intent_id="intent-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        client_order_id=arguments["client_order_id"],
+        request=arguments,
+        observed_at=NOW,
+    )
+
+    result = await service.resume_entry_submission(
+        run_id="run-1",
+        intent_id="intent-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        arguments=arguments,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert result.state == "ORDER_PENDING"
+    assert connection.mutations == 1
+    attempt = store.latest_order_attempt("chain-1")
+    assert attempt is not None
+    assert attempt["client_order_id"] == arguments["client_order_id"]
+    assert store.get_entry_authorization(
+        environment="development",
+        account_id="account-uuid",
+        strategy_date="2026-09-01",
+    )["state"] == "CONSUMED"
+
+
+@pytest.mark.asyncio
+async def test_cancel_pending_reconciliation_preserves_cancel_state(
+    tmp_path, valid_env_file
+) -> None:
+    connection = FakeConnection(reconciled_status="accepted")
+    service, store, arguments = setup_runtime(tmp_path, valid_env_file, connection)
+    await service.submit_entry(
+        run_id="run-1",
+        intent_id="intent-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        arguments=arguments,
+        now=NOW,
+    )
+    store.transition_order_chain(
+        "chain-1", "CANCEL_PENDING", attempt_id="attempt-1"
+    )
+    store.transition_strategy_run(
+        "run-1", "CANCEL_PENDING", "TEST_CANCEL_REQUESTED", {}
+    )
+
+    result = await service.reconcile_entry_order(
+        run_id="run-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        client_order_id=arguments["client_order_id"],
+    )
+
+    assert result is not None and result.state == "CANCEL_PENDING"
+    assert store.get_order_chain("chain-1")["state"] == "CANCEL_PENDING"
+    assert store.get_strategy_run("run-1")["state"] == "CANCEL_PENDING"
+
+
+@pytest.mark.asyncio
+async def test_cancel_entry_maps_suspended_zero_fill_to_rejected_chain(
+    tmp_path, valid_env_file
+) -> None:
+    connection = FakeConnection(reconciled_status="suspended")
+    service, store, arguments = setup_runtime(tmp_path, valid_env_file, connection)
+    submitted = await service.submit_entry(
+        run_id="run-1",
+        intent_id="intent-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        arguments=arguments,
+        now=NOW,
+    )
+
+    result = await service.cancel_entry(
+        run_id="run-1",
+        chain_id="chain-1",
+        intent_id="intent-1",
+        attempt_id="attempt-1",
+        broker_order_id=str(submitted.broker_order_id),
+    )
+
+    assert result.state == "NO_TRADE"
+    assert result.broker_status == "suspended"
+    assert store.get_order_chain("chain-1")["state"] == "REJECTED"
+    assert store.get_strategy_run("run-1")["state"] == "NO_TRADE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("broker_status", "expected_chain_state"),
+    [("canceled", "CANCELED"), ("expired", "EXPIRED")],
+)
+async def test_reconcile_submitting_entry_accepts_terminal_zero_fill(
+    tmp_path,
+    valid_env_file,
+    broker_status: str,
+    expected_chain_state: str,
+) -> None:
+    connection = FakeConnection(reconciled_status=broker_status)
+    service, store, arguments = setup_runtime(tmp_path, valid_env_file, connection)
+    authorization = store.get_entry_authorization(
+        "development", "account-uuid", "2026-09-01"
+    )
+    assert authorization is not None
+    store.begin_authorized_entry_submission(
+        authorization["authorization_id"],
+        environment="development",
+        account_id="account-uuid",
+        strategy_date="2026-09-01",
+        run_id="run-1",
+        intent_id="intent-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        client_order_id=arguments["client_order_id"],
+        request=arguments,
+        observed_at=NOW,
+    )
+
+    result = await service.reconcile_entry_order(
+        run_id="run-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        client_order_id=arguments["client_order_id"],
+    )
+
+    assert result is not None and result.state == "NO_TRADE"
+    assert store.get_order_chain("chain-1")["state"] == expected_chain_state
+    assert store.get_strategy_run("run-1")["state"] == "NO_TRADE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chain_state", ["SUBMITTING", "UNKNOWN"])
+async def test_reconcile_exit_accepts_expired_from_recovery_state(
+    tmp_path,
+    valid_env_file,
+    chain_state: str,
+) -> None:
+    connection = FakeConnection(reconciled_status="expired")
+    service, store, _ = setup_runtime(tmp_path, valid_env_file, connection)
+    store.transition_strategy_run("run-1", "SUBMITTING", "TEST_ENTRY_SUBMITTED")
+    store.transition_strategy_run("run-1", "POSITION_OPEN", "TEST_ENTRY_FILLED")
+    store.transition_strategy_run("run-1", "EXIT_SUBMITTING", "TEST_EXIT_STARTED")
+    arguments = exit_arguments()
+    store.record_order_intent(
+        "exit-recovery-intent",
+        run_id="run-1",
+        purpose="exit",
+        client_order_id=arguments["client_order_id"],
+        payload=arguments,
+    )
+    store.create_order_chain(
+        "exit-recovery-chain",
+        run_id="run-1",
+        intent_id="exit-recovery-intent",
+        purpose="exit",
+    )
+    store.transition_order_chain("exit-recovery-chain", "SUBMITTING")
+    store.record_order_attempt(
+        "exit-recovery-attempt",
+        chain_id="exit-recovery-chain",
+        sequence=0,
+        client_order_id=arguments["client_order_id"],
+        request=arguments,
+    )
+    if chain_state == "UNKNOWN":
+        store.transition_order_chain(
+            "exit-recovery-chain",
+            "UNKNOWN",
+            attempt_id="exit-recovery-attempt",
+        )
+
+    result = await service.reconcile_exit_order(
+        run_id="run-1",
+        chain_id="exit-recovery-chain",
+        attempt_id="exit-recovery-attempt",
+        client_order_id=arguments["client_order_id"],
+    )
+
+    assert result is not None and result.state == "RISK_OFF"
+    assert store.get_order_chain("exit-recovery-chain")["state"] == "EXPIRED"
+    assert store.get_strategy_run("run-1")["state"] == "RISK_OFF"
+
+
+@pytest.mark.asyncio
+async def test_resume_exit_lookup_miss_and_empty_snapshot_stays_risk_off(
+    tmp_path,
+    valid_env_file,
+) -> None:
+    connection = FakeConnection()
+    service, store, _ = setup_runtime(tmp_path, valid_env_file, connection)
+    store.transition_strategy_run("run-1", "SUBMITTING", "TEST_ENTRY_SUBMITTED")
+    store.transition_strategy_run("run-1", "POSITION_OPEN", "TEST_ENTRY_FILLED")
+    store.transition_strategy_run("run-1", "EXIT_SUBMITTING", "TEST_EXIT_STARTED")
+    arguments = exit_arguments()
+    store.record_order_intent(
+        "ambiguous-flat-exit-intent",
+        run_id="run-1",
+        purpose="exit",
+        client_order_id=arguments["client_order_id"],
+        payload=arguments,
+    )
+    store.create_order_chain(
+        "ambiguous-flat-exit-chain",
+        run_id="run-1",
+        intent_id="ambiguous-flat-exit-intent",
+        purpose="exit",
+    )
+    store.transition_order_chain("ambiguous-flat-exit-chain", "SUBMITTING")
+    store.record_order_attempt(
+        "ambiguous-flat-exit-attempt",
+        chain_id="ambiguous-flat-exit-chain",
+        sequence=0,
+        client_order_id=arguments["client_order_id"],
+        request=arguments,
+    )
+
+    result = await service.resume_exit_submission(
+        run_id="run-1",
+        intent_id="ambiguous-flat-exit-intent",
+        chain_id="ambiguous-flat-exit-chain",
+        attempt_id="ambiguous-flat-exit-attempt",
+        arguments=arguments,
+        now=NOW,
+    )
+
+    assert result.state == "RISK_OFF"
+    assert result.detail["position_snapshot_ambiguous"] is True
+    assert connection.mutations == 0
+    assert store.get_order_chain("ambiguous-flat-exit-chain")["state"] == "UNKNOWN"
+    assert store.get_strategy_run("run-1")["state"] == "RISK_OFF"
+    assert store.get_kill_switch()["kill_switch_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_replacement_pending_attempt_resumes_exact_request(
+    tmp_path, valid_env_file
+) -> None:
+    connection = FakeConnection()
+    service, store, arguments = setup_runtime(tmp_path, valid_env_file, connection)
+    await service.submit_entry(
+        run_id="run-1",
+        intent_id="intent-1",
+        chain_id="chain-1",
+        attempt_id="attempt-1",
+        arguments=arguments,
+        now=NOW,
+    )
+    replacement = {
+        "order_id": "broker-order-1",
+        "limit_price": "-0.70",
+        "client_order_id": "tt-replacement-resume",
+    }
+    store.transition_order_chain("chain-1", "REPLACEMENT_PENDING")
+    store.record_order_attempt(
+        "replacement-attempt",
+        chain_id="chain-1",
+        sequence=1,
+        client_order_id=replacement["client_order_id"],
+        request=replacement,
+    )
+
+    result = await service.resume_replacement(
+        chain_id="chain-1",
+        intent_id="intent-1",
+        attempt_id="replacement-attempt",
+    )
+
+    assert result.state == "PENDING"
+    assert connection.mutations == 2
+    assert store.get_order_chain("chain-1")["state"] == "PENDING"

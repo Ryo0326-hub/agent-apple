@@ -2,21 +2,21 @@
 
 The post body is intentionally kept between 220 and 300 words, excluding these instructions, links, and hashtags. Paraphrase it into the author's own voice and replace the marked result before publishing.
 
-I started the Alpaca AI Trading Agents Hackathon with an idea from a YouTube video. It made me curious about collecting option premium with defined risk around earnings.
+I started the Alpaca AI Trading Agents Hackathon with an idea from a YouTube video: earnings can make options expensive, so perhaps a defined-risk trade could collect that premium.
 
-The strategy sounded simple. Building an agent that could trade it safely was not.
+The strategy was easy to describe. Building an agent that could execute it safely was much harder.
 
-I had to handle indicative option quotes, four-leg pricing, ambiguous order timeouts, model output that may drift, and a worker that must manage positions after the AI decision.
+ThetaTrap separates judgment from control. Featherless-hosted Qwen calls Alpaca tools to inspect account, market, order, position, and news evidence. It may veto a candidate or issue the exact approved order call. Deterministic Python chooses every leg and number, enforces one-contract risk, and manages reconciliation and exit. Every Alpaca interaction goes through the official MCP server.
 
-ThetaTrap separates those responsibilities. Featherless-hosted Qwen calls tools to inspect account, market, order, position, and news evidence. It can veto a candidate or issue the exact approved order call. Deterministic Python fixes the structure, strikes, price, and one-contract size, then caps maximum loss at the lower of $500 or 0.5% of equity. Every Alpaca interaction uses the official MCP server.
+The first two official days taught me something important. Across seven earnings symbols, the worker recorded 314 deterministic evaluations. Alpaca Basic's indicative data repeatedly had stale open-interest metadata or unusable quotes across one of the four required legs. No candidate passed every gate, so the system made zero broker attempts and stayed flat at $100,000.
 
-For the competition, I froze seven earnings events and excluded DELL for ambiguous timing and NTAP for unavailable weekly expirations. The agent may review two candidates, but gets only one broker entry attempt per date.
+I kept that result visible instead of pretending a replay was a real trade. I then made one transparent, date-scoped adaptation for September 3: an Intraday Theta Canary using QQQ or SPY, exact $1 wings, at least $0.20 credit, at most $80 defined loss, and a same-day exit. It is not an automatic fallback or a claim of proven alpha.
 
-The release has 220 passing tests, five broker-isolated replay scenarios, restart recovery, one-shot authorization, automatic exit, and private/public Streamlit dashboards. Judges can see every scan, hard gate, Qwen review, MCP trace, order, fill, and equity update without exposing credentials.
+The final release includes a tested one-shot authorization, restart recovery, broker reconciliation, automatic exit, and separate private/public Streamlit dashboards. Judges can follow the original thesis, every failed gate, the pivot, Qwen's MCP trace, and any real order or P&L.
 
-On September 1, ThetaTrap recorded 176 evaluations across four symbols. None passed every hard gate, so it made zero broker attempts or fills and stayed flat at $100,000. I kept that no-trade result visible instead of changing the rules afterward. **Add the September 2 and final reconciled outcome before publishing.**
+**Add the final September 3 broker-reconciled outcome here before publishing.**
 
-This is paper trading with Alpaca Basic indicative data, not proof of profitability. Next, I want to test the strategy over more events, model transaction costs more realistically, and compare Qwen's veto decisions across a larger dataset.
+This remains paper trading with non-consolidated indicative data. Next, I would test on OPRA-quality data, include realistic transaction costs, and evaluate the strategy and Qwen vetoes over many more market events.
 
 Project: **PRE-SUBMISSION — add LabLab URL**
 

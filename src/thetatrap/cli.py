@@ -16,14 +16,19 @@ from zoneinfo import ZoneInfo
 from thetatrap.advisory import run_persisted_advisory_review
 from thetatrap.errors import ThetaTrapError
 from thetatrap.events import load_events
+from thetatrap.intraday import (
+    INTRADAY_STRATEGY_VERSION,
+    TRADE_DATE as INTRADAY_CANARY_TRADE_DATE,
+)
 from thetatrap.log import configure_logging
 from thetatrap.mcp.client import open_alpaca_mcp
 from thetatrap.execution import ExecutionService
 from thetatrap.replay import run_replay_suite
 from thetatrap.rehearsal import run_decision_rehearsal
 from thetatrap.report import generate_report
-from thetatrap.schedule import verified_events_for_day
+from thetatrap.schedule import SEP3_INTRADAY_CANARY_SESSION, verified_events_for_day
 from thetatrap.settings import (
+    StrategyProfile,
     account_suffix,
     load_settings,
     validate_environment_pair,
@@ -394,13 +399,22 @@ def _handle_entry_authorization(
                 "--strategy-date is required when arming entry authorization"
             )
         events = load_events()
-        if not verified_events_for_day(events, strategy_day):
+        strategy_version = events.strategy_version
+        stop_new_orders = events.entry_window.stop_new_orders
+        if settings.strategy_profile is StrategyProfile.INTRADAY_CANARY:
+            if strategy_day != INTRADAY_CANARY_TRADE_DATE:
+                raise ValueError(
+                    "intraday_canary entry authorization is limited to 2026-09-03"
+                )
+            strategy_version = INTRADAY_STRATEGY_VERSION
+            stop_new_orders = SEP3_INTRADAY_CANARY_SESSION.stop_new_orders
+        elif not verified_events_for_day(events, strategy_day):
             raise ValueError(
                 "strategy date has no verified event in the frozen configuration"
             )
         expires_at = datetime.combine(
             strategy_day,
-            events.entry_window.stop_new_orders,
+            stop_new_orders,
             tzinfo=ZoneInfo(events.timezone),
         )
         if expires_at.astimezone(UTC) <= current:
@@ -417,7 +431,7 @@ def _handle_entry_authorization(
                 environment=settings.environment,
                 account_id=settings.expected_account_id,
                 strategy_day=strategy_day,
-                strategy_version=events.strategy_version,
+                strategy_version=strategy_version,
             ),
             environment=settings.environment,
             account_id=settings.expected_account_id,

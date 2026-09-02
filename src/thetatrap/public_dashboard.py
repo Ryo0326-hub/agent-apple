@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
@@ -36,6 +38,24 @@ UUID_PATTERN = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b"
 )
 PAPER_ACCOUNT_PATTERN = re.compile(r"\bPA[A-Z0-9]{8,}\b")
+CANARY_STRATEGY_DATE = "2026-09-03"
+CANARY_PROFILE_ID = "sep3_intraday_theta_canary_v1"
+CANARY_PROFILE = {
+    "profile_id": CANARY_PROFILE_ID,
+    "name": "Intraday Theta Canary",
+    "scope": "September 3 competition run only",
+    "universe": "QQQ and SPY, ranked by complete quote quality",
+    "expiration": "September 4, 2026 (1 DTE)",
+    "entry_window": "09:45–10:45 ET",
+    "cancel_at": "10:50 ET",
+    "exit_start": "15:15 ET",
+    "aggressive_exit_at": "15:25 ET",
+    "flat_target": "15:45 ET",
+    "structure": "$1-wide symmetric iron condor · 1 contract",
+    "minimum_credit": "$0.20",
+    "maximum_defined_loss": "$80",
+    "qwen_cadence": "eligible review cycle no more than once every 5 minutes",
+}
 
 
 def display_build_sha(raw: str | None = None) -> str:
@@ -88,6 +108,13 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
     safety = _mapping(report.get("safety"))
     data_profile = _mapping(report.get("data_profile"))
     heartbeat_age = _heartbeat_age_seconds(health.get("observed_at"))
+    run_history = _sequence(strategy.get("run_history"))
+    run_dates = {
+        str(run.get("run_id")): run.get("strategy_date")
+        for run in map(_mapping, run_history)
+        if run.get("run_id")
+    }
+    strategy_profile = _public_strategy_profile(strategy, focus_run)
 
     chains: list[dict[str, Any]] = []
     order_timeline: list[dict[str, Any]] = []
@@ -99,6 +126,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         status_history = _sequence(chain.get("status_history"))
         chains.append(
             {
+                "strategy_date": run_dates.get(str(chain.get("run_id"))),
                 "purpose": chain.get("purpose"),
                 "state": chain.get("state"),
                 "created_at": chain.get("created_at"),
@@ -112,6 +140,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
             order_timeline.append(
                 {
                     "observed_at": status.get("observed_at"),
+                    "strategy_date": run_dates.get(str(chain.get("run_id"))),
                     "purpose": chain.get("purpose"),
                     "event": status.get("event_kind"),
                     "from": status.get("from_state"),
@@ -124,6 +153,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
             fills.append(
                 {
                     "filled_at": fill.get("filled_at"),
+                    "strategy_date": run_dates.get(str(chain.get("run_id"))),
                     "purpose": chain.get("purpose"),
                     "symbol": fill.get("symbol"),
                     "side": fill.get("side"),
@@ -145,6 +175,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         _public_scan_matrix_row(_mapping(item))
         for item in _sequence(candidate_section.get("scan_matrix"))
     ]
+    scan_matrix = _augment_scan_matrix(scan_matrix, scan_history)
     reviews = [
         _public_review(_mapping(item), kind="QWEN_DECISION")
         for item in _sequence(agent.get("reviews"))
@@ -219,19 +250,16 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
             "observed_at": health.get("observed_at"),
             "market_is_open": health.get("market_is_open"),
             "heartbeat_age_seconds": heartbeat_age,
-            "stale": (
-                heartbeat_age is None
-                or heartbeat_age > HEARTBEAT_STALE_SECONDS
-            ),
+            "stale": (heartbeat_age is None or heartbeat_age > HEARTBEAT_STALE_SECONDS),
         },
         "mcp": {
             "status": mcp.get("operational_status") or session.get("status"),
             "package_version": session.get("package_version"),
             "tool_count": session.get("tool_count"),
             "required_schema_hash": session.get("required_schema_hash"),
-            "last_successful_call_at": _mapping(
-                mcp.get("last_successful_call")
-            ).get("called_at"),
+            "last_successful_call_at": _mapping(mcp.get("last_successful_call")).get(
+                "called_at"
+            ),
             "timeline": mcp_timeline,
         },
         "emergency": {
@@ -246,9 +274,11 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         "strategy": {
             "state": focus_run.get("state", "NOT_STARTED"),
             "strategy_date": focus_run.get("strategy_date"),
+            "version": focus_run.get("strategy_version"),
+            "profile": strategy_profile,
             "no_trade_reason": strategy.get("no_trade_reason"),
             "transitions": transitions,
-            "run_count": len(_sequence(strategy.get("run_history"))),
+            "run_count": len(run_history),
         },
         "candidate": {
             "symbol": candidate.get("symbol"),
@@ -277,16 +307,12 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         "orders": {
             "chain_count": orders.get("chain_count", 0),
             "fill_count": orders.get("fill_count", 0),
-            "option_cash_flow_ex_fees": orders.get(
-                "option_cash_flow_ex_fees", "0.00"
-            ),
+            "option_cash_flow_ex_fees": orders.get("option_cash_flow_ex_fees", "0.00"),
             "chains": chains,
             "timeline": sorted(
                 order_timeline, key=lambda item: str(item.get("observed_at") or "")
             ),
-            "fills": sorted(
-                fills, key=lambda item: str(item.get("filled_at") or "")
-            ),
+            "fills": sorted(fills, key=lambda item: str(item.get("filled_at") or "")),
         },
         "portfolio": {
             "position": (
@@ -306,9 +332,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
                     "observed_at": item.get("observed_at"),
                     "is_flat": item.get("is_flat"),
                 }
-                for item in map(
-                    _mapping, _sequence(portfolio.get("position_history"))
-                )
+                for item in map(_mapping, _sequence(portfolio.get("position_history")))
             ],
         },
         "safety": {
@@ -343,15 +367,15 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
                     "consumed_at": item.get("consumed_at"),
                     "revoked_at": item.get("revoked_at"),
                 }
-                for item in map(
-                    _mapping, _sequence(safety.get("entry_permissions"))
-                )
+                for item in map(_mapping, _sequence(safety.get("entry_permissions")))
             ],
-            "maximum_defined_loss": safety.get("maximum_defined_loss", "500.00"),
-            "maximum_contracts": safety.get("maximum_contracts", 1),
-            "equity_kill_threshold": safety.get(
-                "equity_kill_threshold", "99000.00"
+            "maximum_defined_loss": (
+                "80.00"
+                if strategy_profile.get("profile_id") == CANARY_PROFILE_ID
+                else safety.get("maximum_defined_loss", "500.00")
             ),
+            "maximum_contracts": safety.get("maximum_contracts", 1),
+            "equity_kill_threshold": safety.get("equity_kill_threshold", "99000.00"),
             "paper_only": safety.get("paper_only", True),
             "read_only_viewer": safety.get("read_only_viewer", True),
         },
@@ -373,6 +397,8 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         "limitations": report.get("limitations", []),
         "report_digest": report.get("report_digest"),
     }
+    public["competition_days"] = _competition_day_summaries(public)
+    public["activity_timeline"] = _build_activity_timeline(public)
     return redact_public_identifiers(public)
 
 
@@ -497,6 +523,48 @@ def _public_scan_matrix_row(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _augment_scan_matrix(
+    matrix: list[dict[str, Any]], history: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Include date-scoped canary symbols that are not in the earnings event table."""
+
+    keys = {(row.get("event_date"), row.get("symbol")) for row in matrix}
+    grouped: dict[tuple[Any, Any], list[dict[str, Any]]] = {}
+    for item in history:
+        key = (item.get("strategy_date"), item.get("symbol"))
+        grouped.setdefault(key, []).append(item)
+    for key, rows in grouped.items():
+        if key in keys:
+            continue
+        latest = max(rows, key=lambda item: str(item.get("scanned_at") or ""))
+        matrix.append(
+            {
+                "event_date": key[0],
+                "symbol": key[1],
+                "configured": (
+                    "SEP3_CANARY" if key[0] == CANARY_STRATEGY_DATE else "OBSERVED"
+                ),
+                "latest_result": latest.get("result"),
+                "evaluations": len(rows),
+                "eligible": sum(1 for item in rows if item.get("eligible") is True),
+                "latest_scan": latest.get("scanned_at"),
+                "failed_gate": ", ".join(
+                    str(value) for value in _sequence(latest.get("failed_gates"))
+                ),
+                "iv_ratio": latest.get("iv_ratio"),
+                "max_loss": latest.get("maximum_loss"),
+                "exclusion": None,
+            }
+        )
+    return sorted(
+        matrix,
+        key=lambda item: (
+            str(item.get("event_date") or ""),
+            str(item.get("symbol") or ""),
+        ),
+    )
+
+
 def _candidate_payload(value: Any) -> Mapping[str, Any]:
     payload = _mapping(value)
     nested = _mapping(payload.get("candidate"))
@@ -524,6 +592,271 @@ def _candidate_legs(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return legs
+
+
+def _public_strategy_profile(
+    strategy: Mapping[str, Any], focus_run: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return a public-safe description of the profile governing the focus run."""
+
+    context = _mapping(focus_run.get("context"))
+    reported = (
+        _mapping(strategy.get("profile"))
+        or _mapping(focus_run.get("profile"))
+        or _mapping(context.get("strategy_profile"))
+    )
+    profile_id = str(
+        reported.get("profile_id")
+        or reported.get("id")
+        or context.get("strategy_profile_id")
+        or ""
+    )
+    strategy_date = str(focus_run.get("strategy_date") or "")
+    is_canary = (
+        strategy_date == CANARY_STRATEGY_DATE
+        or profile_id == CANARY_PROFILE_ID
+        or "intraday_theta_canary" in profile_id.lower()
+    )
+    if is_canary:
+        profile = dict(CANARY_PROFILE)
+        for key in profile:
+            if reported.get(key) not in (None, ""):
+                profile[key] = reported[key]
+        entry_window = _mapping(context.get("entry_window_et"))
+        exit_window = _mapping(context.get("exit_window_et"))
+        structure = _mapping(context.get("structure"))
+        symbols = _sequence(context.get("symbols"))
+        if context.get("strategy_name"):
+            profile["name"] = context.get("strategy_name")
+        if symbols:
+            profile["universe"] = ", ".join(str(symbol) for symbol in symbols)
+        if context.get("expiration"):
+            profile["expiration"] = str(context.get("expiration")) + " (1 DTE)"
+        if entry_window.get("start") and entry_window.get("stop_new_orders"):
+            profile["entry_window"] = (
+                f"{entry_window['start']}–{entry_window['stop_new_orders']} ET"
+            )
+        if entry_window.get("cancel_all_unfilled"):
+            profile["cancel_at"] = f"{entry_window['cancel_all_unfilled']} ET"
+        if exit_window.get("start"):
+            profile["exit_start"] = f"{exit_window['start']} ET"
+        if exit_window.get("aggressive_limit"):
+            profile["aggressive_exit_at"] = f"{exit_window['aggressive_limit']} ET"
+        if exit_window.get("broker_flat_target"):
+            profile["flat_target"] = f"{exit_window['broker_flat_target']} ET"
+        if structure:
+            profile["structure"] = (
+                f"${structure.get('wing_width', '1.00')}-wide symmetric iron condor"
+                f" · {structure.get('quantity', 1)} contract"
+            )
+            if structure.get("minimum_credit"):
+                profile["minimum_credit"] = f"${structure['minimum_credit']}"
+            if structure.get("maximum_loss_dollars"):
+                profile["maximum_defined_loss"] = (
+                    f"${structure['maximum_loss_dollars']}"
+                )
+        profile["activation_reason"] = context.get("activation_reason")
+        profile["profitability_claim"] = context.get("profitability_claim") or "none"
+        profile["profile_kind"] = context.get("profile_kind")
+        profile["phase"] = "ADAPTIVE_COMPETITION_PROFILE"
+        return profile
+    return {
+        "profile_id": profile_id or "earnings_theta_trap_v1",
+        "name": "Earnings ThetaTrap",
+        "scope": "September 1–2 verified earnings events",
+        "universe": "Frozen first-party earnings universe",
+        "expiration": "September 4, 2026",
+        "entry_window": "14:50–15:40 ET",
+        "cancel_at": "15:45 ET",
+        "exit_start": "Next session, 09:45 ET",
+        "structure": "Expected-move iron condor · 1 contract",
+        "maximum_defined_loss": "$500",
+        "phase": "PRIMARY_EARNINGS_PROFILE",
+    }
+
+
+def _competition_day_summaries(view: Mapping[str, Any]) -> list[dict[str, Any]]:
+    candidate = _mapping(view.get("candidate"))
+    agent = _mapping(view.get("agent"))
+    orders = _mapping(view.get("orders"))
+    dates = {"2026-09-01", "2026-09-02", CANARY_STRATEGY_DATE}
+    scans = [_mapping(item) for item in _sequence(candidate.get("history"))]
+    reviews = [_mapping(item) for item in _sequence(agent.get("reviews"))]
+    advisories = [_mapping(item) for item in _sequence(agent.get("advisories"))]
+    chains = [_mapping(item) for item in _sequence(orders.get("chains"))]
+    fills = [_mapping(item) for item in _sequence(orders.get("fills"))]
+
+    rows: list[dict[str, Any]] = []
+    for strategy_date in sorted(dates):
+        day_scans = [
+            item for item in scans if item.get("strategy_date") == strategy_date
+        ]
+        day_reviews = [
+            item for item in reviews if item.get("strategy_date") == strategy_date
+        ]
+        day_advisories = [
+            item for item in advisories if item.get("strategy_date") == strategy_date
+        ]
+        day_chains = [
+            item for item in chains if item.get("strategy_date") == strategy_date
+        ]
+        day_fills = [
+            item for item in fills if item.get("strategy_date") == strategy_date
+        ]
+        failures = Counter(
+            str(gate)
+            for scan in day_scans
+            for gate in _sequence(scan.get("failed_gates"))
+            if gate
+        )
+        eligible = sum(1 for item in day_scans if item.get("eligible") is True)
+        if day_fills:
+            outcome = "FILLS RECORDED"
+        elif day_chains:
+            outcome = "ORDER LIFECYCLE RECORDED"
+        elif day_scans and eligible == 0:
+            outcome = "NO TRADE · GATES HELD"
+        elif eligible:
+            outcome = "ELIGIBLE · NO ORDER CHAIN"
+        else:
+            outcome = "SCHEDULED"
+        rows.append(
+            {
+                "date": strategy_date,
+                "profile": (
+                    "Intraday Theta Canary"
+                    if strategy_date == CANARY_STRATEGY_DATE
+                    else "Earnings ThetaTrap"
+                ),
+                "outcome": outcome,
+                "scans": len(day_scans),
+                "eligible": eligible,
+                "qwen_decisions": len(day_reviews),
+                "qwen_advisories": len(day_advisories),
+                "order_chains": len(day_chains),
+                "leg_fills": len(day_fills),
+                "top_gate_failures": ", ".join(
+                    f"{name} ({count})" for name, count in failures.most_common(3)
+                ),
+            }
+        )
+    return rows
+
+
+def _build_activity_timeline(view: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Merge existing public report evidence into one chronological ledger."""
+
+    rows: list[dict[str, Any]] = []
+
+    def add(
+        occurred_at: Any,
+        category: str,
+        strategy_date: Any,
+        subject: Any,
+        outcome: Any,
+        detail: Any = None,
+    ) -> None:
+        rows.append(
+            {
+                "occurred_at": occurred_at,
+                "date": strategy_date,
+                "category": category,
+                "subject": subject,
+                "outcome": outcome,
+                "detail": detail,
+            }
+        )
+
+    strategy = _mapping(view.get("strategy"))
+    for item in map(_mapping, _sequence(strategy.get("transitions"))):
+        add(
+            item.get("transitioned_at"),
+            "STRATEGY",
+            item.get("strategy_date"),
+            f"{item.get('from')} → {item.get('to')}",
+            item.get("reason"),
+        )
+
+    candidate = _mapping(view.get("candidate"))
+    for item in map(_mapping, _sequence(candidate.get("history"))):
+        add(
+            item.get("scanned_at"),
+            "SCREEN",
+            item.get("strategy_date"),
+            item.get("symbol"),
+            item.get("result"),
+            ", ".join(str(value) for value in _sequence(item.get("failed_gates")))
+            or "all deterministic gates passed",
+        )
+
+    agent = _mapping(view.get("agent"))
+    for item in map(
+        _mapping,
+        [*_sequence(agent.get("reviews")), *_sequence(agent.get("advisories"))],
+    ):
+        add(
+            item.get("ended_at") or item.get("started_at"),
+            "QWEN",
+            item.get("strategy_date"),
+            f"{item.get('kind')} · {item.get('symbol')}",
+            item.get("decision") or item.get("status"),
+            item.get("summary") or item.get("reason"),
+        )
+
+    mcp = _mapping(view.get("mcp"))
+    for item in map(_mapping, _sequence(mcp.get("timeline"))):
+        add(
+            item.get("called_at"),
+            "ALPACA MCP",
+            None,
+            item.get("tool"),
+            item.get("status"),
+            f"{item.get('principal') or 'unknown'} · {item.get('duration_ms') or 0} ms",
+        )
+
+    orders = _mapping(view.get("orders"))
+    for item in map(_mapping, _sequence(orders.get("timeline"))):
+        add(
+            item.get("observed_at"),
+            "ORDER",
+            item.get("strategy_date"),
+            item.get("purpose"),
+            item.get("event") or item.get("broker_status"),
+            f"{item.get('from') or 'none'} → {item.get('to') or 'none'}",
+        )
+    for item in map(_mapping, _sequence(orders.get("fills"))):
+        add(
+            item.get("filled_at"),
+            "FILL",
+            item.get("strategy_date"),
+            item.get("symbol"),
+            f"{item.get('side')} {item.get('quantity')}",
+            _money(item.get("price")),
+        )
+
+    safety = _mapping(view.get("safety"))
+    for item in map(_mapping, _sequence(safety.get("entry_permission_history"))):
+        add(
+            item.get("consumed_at") or item.get("revoked_at") or item.get("armed_at"),
+            "ENTRY PERMIT",
+            item.get("strategy_date"),
+            "date-bound authorization",
+            item.get("state"),
+            f"expires {item.get('expires_at') or 'unknown'}",
+        )
+    kill = _mapping(safety.get("kill_switch"))
+    for item in map(_mapping, _sequence(kill.get("history"))):
+        add(
+            item.get("created_at"),
+            "KILL SWITCH",
+            None,
+            "operator safety control",
+            "ON" if item.get("enabled") else "OFF",
+            item.get("reason"),
+        )
+
+    rows.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
+    return rows
 
 
 def main() -> None:
@@ -602,6 +935,25 @@ def main() -> None:
           letter-spacing: .035em;
           margin: .2rem 0 .65rem;
         }
+        .tt-pivot {
+          border: 1px solid #c9d9ff;
+          border-left: 5px solid #3568d4;
+          background: #f3f7ff;
+          color: #17386f;
+          border-radius: 12px;
+          padding: .85rem 1rem;
+          margin: .65rem 0 1rem;
+        }
+        .tt-pivot strong { color: #17386f; }
+        .tt-role {
+          border: 1px solid var(--tt-line);
+          background: var(--tt-card);
+          border-radius: 12px;
+          padding: .8rem .9rem;
+          min-height: 132px;
+        }
+        .tt-role h4 { margin: 0 0 .35rem; color: var(--tt-ink); }
+        .tt-role p { margin: 0; color: var(--tt-muted); font-size: .9rem; }
         [data-testid="stMetric"] {
           border: 1px solid var(--tt-line);
           background: var(--tt-card);
@@ -634,7 +986,7 @@ def main() -> None:
         <section class="tt-hero">
           <div class="tt-kicker">Live competition audit · build {build}</div>
           <h1>ThetaTrap</h1>
-          <p>A bounded MCP-native AI agent that screens earnings options, asks Qwen for a qualitative risk decision, and lets deterministic policy own every number and broker boundary.</p>
+          <p>A bounded MCP-native options agent. The original earnings strategy stayed fail-closed when Alpaca Basic data could not support a valid four-leg trade; the date-scoped Sep 3 Intraday Theta Canary is the transparent, testable response.</p>
           <div class="tt-badges">
             <span class="tt-badge">PAPER TRADING</span>
             <span class="tt-badge">ALPACA OFFICIAL MCP</span>
@@ -669,11 +1021,17 @@ def _render_live_report() -> None:
         st.stop()
 
     view = build_public_view(report)
+    configured_profile = os.environ.get("THETATRAP_STRATEGY_PROFILE", "earnings")
     _render_status(view)
+    _render_judge_story(
+        view,
+        configured_profile=configured_profile,
+    )
     _render_strategy(view)
     _render_agent(view)
+    _render_activity_history(view)
     _render_orders_and_portfolio(view)
-    _render_safety(view)
+    _render_safety(view, configured_profile=configured_profile)
     _render_limitations(view)
 
 
@@ -734,11 +1092,7 @@ def _render_status(view: Mapping[str, Any]) -> None:
     )
     if health.get("stale"):
         age = health.get("heartbeat_age_seconds")
-        detail = (
-            f" ({int(age)} seconds old)"
-            if isinstance(age, (int, float))
-            else ""
-        )
+        detail = f" ({int(age)} seconds old)" if isinstance(age, (int, float)) else ""
         st.warning(
             "Worker evidence is stale or missing"
             + detail
@@ -746,6 +1100,144 @@ def _render_status(view: Mapping[str, Any]) -> None:
         )
     if permission.get("strategy_date"):
         st.caption(f"Active permission date: {permission.get('strategy_date')}")
+
+
+def _render_judge_story(
+    view: Mapping[str, Any], *, configured_profile: str = "earnings"
+) -> None:
+    strategy = _mapping(view.get("strategy"))
+    permission = _mapping(view.get("one_shot_entry"))
+    day_rows = _sequence(view.get("competition_days"))
+    _section_heading(
+        "00 · Competition journey",
+        "One thesis, observed constraints, one transparent pivot",
+        "The strategy change is part of the audit trail: it is neither hidden nor presented as evidence of a proven trading edge.",
+    )
+
+    cards = st.columns(4)
+    cards[0].markdown(
+        '<div class="tt-role"><h4>1 · Original thesis</h4><p>Sell unusually rich '
+        "earnings premium with a one-contract, defined-risk iron condor after "
+        "every event, quote, liquidity, and risk gate passes.</p></div>",
+        unsafe_allow_html=True,
+    )
+    cards[1].markdown(
+        '<div class="tt-role"><h4>2 · Sep 1–2 evidence</h4><p>The worker scanned '
+        "every scheduled symbol automatically. No complete candidate passed, so "
+        "the account stayed flat and no order was forced.</p></div>",
+        unsafe_allow_html=True,
+    )
+    cards[2].markdown(
+        '<div class="tt-role"><h4>3 · Root cause</h4><p>IEX stock and indicative '
+        "options data are not consolidated SIP/OPRA feeds. Stale open-interest "
+        "dates and unusable four-leg quotes repeatedly failed hard gates.</p></div>",
+        unsafe_allow_html=True,
+    )
+    cards[3].markdown(
+        '<div class="tt-role"><h4>4 · Sep 3 response</h4><p>A date-scoped intraday '
+        "QQQ/SPY canary targets a more liquid universe and a same-day round trip, "
+        "while retaining one contract and deterministic risk control.</p></div>",
+        unsafe_allow_html=True,
+    )
+
+    observed_rows = [
+        item
+        for item in map(_mapping, day_rows)
+        if item.get("scans") or item.get("date") == CANARY_STRATEGY_DATE
+    ]
+    st.markdown("#### Official strategy-day evidence")
+    st.dataframe(observed_rows, width="stretch", hide_index=True)
+    st.caption(
+        "A Qwen advisory is real read-only agent activity, but it is not an "
+        "execution decision and cannot reverse a deterministic rejection."
+    )
+
+    profile = dict(CANARY_PROFILE)
+    reported = _mapping(strategy.get("profile"))
+    if reported.get("profile_id") == CANARY_PROFILE_ID:
+        profile.update(
+            {
+                key: value
+                for key, value in reported.items()
+                if key
+                in {
+                    *profile,
+                    "activation_reason",
+                    "profitability_claim",
+                    "profile_kind",
+                }
+                and value not in (None, "")
+            }
+        )
+    strategy_state = str(strategy.get("state") or "NOT_STARTED")
+    canary_day = datetime.fromisoformat(CANARY_STRATEGY_DATE).date()
+    market_day = datetime.now(UTC).astimezone(ZoneInfo("America/New_York")).date()
+    if strategy.get("strategy_date") == CANARY_STRATEGY_DATE:
+        if strategy_state in {"FLAT", "NO_TRADE"}:
+            profile_status = f"COMPLETED · {strategy_state}"
+        elif market_day > canary_day:
+            profile_status = f"POST-RUN ATTENTION · {strategy_state}"
+        else:
+            profile_status = f"LIVE RUN · {strategy_state}"
+    elif permission.get("strategy_date") == CANARY_STRATEGY_DATE and permission.get(
+        "active"
+    ):
+        profile_status = "AUTHORIZED · WAITING FOR WINDOW"
+    elif configured_profile.strip().lower() == "intraday_canary":
+        profile_status = "DEPLOYED · WAITING FOR SEP 3 RUN EVIDENCE"
+    else:
+        profile_status = "PLANNED · NOT THE DEPLOYED PROFILE"
+    st.markdown(
+        '<div class="tt-pivot"><strong>Sep 3 profile status: '
+        f"{escape(profile_status)}</strong><br>Competition-only adaptation; it is "
+        "not an automatic fallback for ordinary earnings scans.</div>",
+        unsafe_allow_html=True,
+    )
+    if profile.get("activation_reason"):
+        st.caption(f"Activation reason: {profile['activation_reason']}")
+    st.dataframe(
+        [
+            {"control": "Universe", "frozen value": profile["universe"]},
+            {"control": "Expiration", "frozen value": profile["expiration"]},
+            {
+                "control": "Entry / cancel",
+                "frozen value": f"{profile['entry_window']} / {profile['cancel_at']}",
+            },
+            {
+                "control": "Exit",
+                "frozen value": f"start {profile['exit_start']} · full-wing {profile['aggressive_exit_at']} · flat target {profile['flat_target']}",
+            },
+            {"control": "Structure", "frozen value": profile["structure"]},
+            {
+                "control": "Credit / max loss",
+                "frozen value": f"minimum {profile['minimum_credit']} · at most {profile['maximum_defined_loss']}",
+            },
+            {
+                "control": "Qwen cadence",
+                "frozen value": profile["qwen_cadence"],
+            },
+        ],
+        width="stretch",
+        hide_index=True,
+    )
+
+    st.markdown("#### Who controls what")
+    st.dataframe(
+        [
+            {
+                "component": "Qwen via Featherless",
+                "can": "Call bounded Alpaca MCP reads; inspect account, clock, positions, orders and news; veto or issue the exact frozen entry call",
+                "cannot": "Choose or alter symbol, expiration, strikes, quantity, price, maximum loss, exits, or a failed gate",
+            },
+            {
+                "component": "Deterministic Python",
+                "can": "Rank quote quality; construct all four legs; calculate risk; revalidate; authorize; reconcile; cancel; reprice; exit",
+                "cannot": "Invent missing data, bypass Alpaca MCP, exceed the profile, or claim profitability from one paper result",
+            },
+        ],
+        width="stretch",
+        hide_index=True,
+    )
 
 
 def _render_strategy(view: Mapping[str, Any]) -> None:
@@ -849,9 +1341,7 @@ def _render_strategy(view: Mapping[str, Any]) -> None:
                 detail_columns[2].metric(
                     "Expected move", _money(item.get("expected_move"))
                 )
-                detail_columns[3].metric(
-                    "Credit", _money(item.get("proposed_credit"))
-                )
+                detail_columns[3].metric("Credit", _money(item.get("proposed_credit")))
                 detail_columns[4].metric("Max loss", _money(item.get("maximum_loss")))
                 detail_columns[5].metric("Contracts", item.get("quantity") or "n/a")
                 if _sequence(item.get("legs")):
@@ -994,7 +1484,7 @@ def _render_orders_and_portfolio(view: Mapping[str, Any]) -> None:
     orders = _mapping(view.get("orders"))
     portfolio = _mapping(view.get("portfolio"))
     _section_heading(
-        "03 · Broker evidence",
+        "04 · Broker evidence",
         "Orders, fills, positions, and equity",
         "Broker-reconciled paper evidence is shown separately from model decisions. Account equity is the authoritative competition result.",
     )
@@ -1049,12 +1539,36 @@ def _render_orders_and_portfolio(view: Mapping[str, Any]) -> None:
             st.dataframe(timeline, width="stretch", hide_index=True)
 
 
-def _render_safety(view: Mapping[str, Any]) -> None:
+def _render_activity_history(view: Mapping[str, Any]) -> None:
+    activity = _sequence(view.get("activity_timeline"))
+    _section_heading(
+        "03 · Complete audit trail",
+        "What the worker, Qwen, MCP, and broker did",
+        "This unified ledger is assembled from persisted report evidence. It is newest-first; the candidate ledger above retains every individual symbol evaluation.",
+    )
+    if not activity:
+        st.info("No timestamped activity has been published yet.")
+        return
+    category_counts = Counter(
+        str(_mapping(item).get("category") or "UNKNOWN") for item in activity
+    )
+    st.caption(
+        " · ".join(
+            f"{category}: {count:,}"
+            for category, count in sorted(category_counts.items())
+        )
+    )
+    st.dataframe(activity, width="stretch", hide_index=True, height=430)
+
+
+def _render_safety(
+    view: Mapping[str, Any], *, configured_profile: str = "earnings"
+) -> None:
     safety = _mapping(view.get("safety"))
     kill = _mapping(safety.get("kill_switch"))
     permission = _mapping(safety.get("entry_permission"))
     _section_heading(
-        "04 · Safety boundary",
+        "05 · Safety boundary",
         "Deterministic controls remain in charge",
         "The public container has a read-only database mount, no broker/model credentials, and no mutation callbacks.",
     )
@@ -1064,13 +1578,14 @@ def _render_safety(view: Mapping[str, Any]) -> None:
         "ON" if kill.get("enabled") else "OFF" if kill.get("known") else "UNKNOWN",
     )
     columns[1].metric("Entry permit", permission.get("state", "MISSING"))
-    columns[2].metric(
-        "Max defined loss", _money(safety.get("maximum_defined_loss"))
+    maximum_defined_loss = (
+        "80.00"
+        if configured_profile.strip().lower() == "intraday_canary"
+        else safety.get("maximum_defined_loss")
     )
+    columns[2].metric("Max defined loss", _money(maximum_defined_loss))
     columns[3].metric("Max contracts", safety.get("maximum_contracts", 1))
-    columns[4].metric(
-        "Equity kill floor", _money(safety.get("equity_kill_threshold"))
-    )
+    columns[4].metric("Equity kill floor", _money(safety.get("equity_kill_threshold")))
     st.info(
         "Public evidence only: no order button, no kill-switch control, no Alpaca key, and no Featherless key exists in this viewer."
     )
@@ -1087,13 +1602,11 @@ def _render_safety(view: Mapping[str, Any]) -> None:
 def _render_limitations(view: Mapping[str, Any]) -> None:
     data_profile = _mapping(view.get("data_profile"))
     _section_heading(
-        "05 · Evidence boundary",
+        "06 · Evidence boundary",
         "What this dashboard does—and does not—prove",
         "This is transparent competition evidence, not a claim of live-market profitability.",
     )
-    st.warning(
-        "PAPER TRADING · BASIC INDICATIVE OPTIONS DATA · SIMULATED FILLS"
-    )
+    st.warning("PAPER TRADING · BASIC INDICATIVE OPTIONS DATA · SIMULATED FILLS")
     limitations = [
         *(_sequence(data_profile.get("limitations"))),
         *(_sequence(view.get("limitations"))),
@@ -1102,6 +1615,8 @@ def _render_limitations(view: Mapping[str, Any]) -> None:
         st.markdown(f"- {limitation}")
     st.markdown(
         "- Earnings and macro events can move the underlying beyond the modeled range.\n"
+        "- The Sep 3 canary is a competition-only adaptation chosen after observing Sep 1–2 data constraints; it is not a backtested or generic fallback strategy.\n"
+        "- A same-day paper fill or nonzero P&L would demonstrate execution, not repeatable alpha.\n"
         "- Historical or paper performance does not guarantee future results.\n"
         "- This system is a bounded engineering demonstration, not investment advice."
     )
@@ -1111,7 +1626,7 @@ def _render_limitations(view: Mapping[str, Any]) -> None:
 
 def _section_heading(kicker: str, title: str, description: str) -> None:
     st.markdown(
-        "<div class=\"tt-section\">"
+        '<div class="tt-section">'
         f"<small>{escape(kicker)}</small>"
         f"<h2>{escape(title)}</h2>"
         f"<p>{escape(description)}</p>"
@@ -1143,7 +1658,9 @@ def _heartbeat_age_seconds(
     if observed.tzinfo is None:
         observed = observed.replace(tzinfo=UTC)
     current = now or datetime.now(UTC)
-    return max(0.0, (current.astimezone(UTC) - observed.astimezone(UTC)).total_seconds())
+    return max(
+        0.0, (current.astimezone(UTC) - observed.astimezone(UTC)).total_seconds()
+    )
 
 
 def _env_bool(name: str, default: bool) -> bool:

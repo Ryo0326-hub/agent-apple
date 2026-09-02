@@ -30,13 +30,13 @@ All times are Eastern and the worker remains on `America/New_York`:
 | Monday, Aug 31 | Deploy disarmed; discover UUID; verify MCP schema; run replay, real read-only Qwen smoke, restart persistence, and competition preflight. Do not authorize an entry. |
 | Tuesday, Sep 1 | Fresh preflight around 14:30; authorize Sep 1 only; start before 14:50; entry window 14:50-15:40; unresolved entry orders canceled by 15:45. |
 | Wednesday, Sep 2 | Reconcile/exit from 09:45-09:53; authorize Sep 2 only after Alpaca confirms zero positions and zero open orders; repeat the afternoon entry window. |
-| Thursday, Sep 3 | Reconcile/exit from 09:45-09:53; create no new authorization; confirm broker-flat state and retain Thursday EOD equity. |
+| Thursday, Sep 3 | Final-day canary: preflight and backup before 09:30; authorize Sep 3 only after flat/clean confirmation; QQQ/SPY entry window 09:45-10:45; cancel unresolved entry by 10:50; begin exit 15:15; full-wing exit limit 15:25; target broker-flat by 15:45; retain Thursday EOD equity. |
 | Friday, Sep 4 | Capture the 09:30 equity snapshot, export the final report, update every result placeholder, and submit by 10:15. |
 
-The Tuesday and Wednesday authorizations are independent and sequential. There
-may never be simultaneous positions. At the `$500` per-trade cap, the two-date
-theoretical maximum loss is approximately `$1,000`; the `$99,000` equity stop
-remains binding.
+Every authorization is independent and date-bound. There may never be
+simultaneous positions. The earnings profile caps each trade at `$500`; the
+September 3 canary caps its one-contract defined loss at `$80`. The `$99,000`
+account-equity stop remains binding.
 
 ## 1. Provision the host
 
@@ -123,6 +123,7 @@ the `PA...` display number. Start with:
 THETATRAP_ENVIRONMENT=competition
 THETATRAP_READ_ONLY=true
 THETATRAP_EXECUTION_ENABLED=false
+THETATRAP_STRATEGY_PROFILE=intraday_canary
 ALPACA_PAPER_TRADE=true
 ALPACA_STOCK_FEED=iex
 ALPACA_OPTION_FEED=indicative
@@ -246,10 +247,17 @@ and databases:
    long-lived Droplet worker running through exit and broker-flat confirmation.
 
 If the competition scan produces no eligible candidate, no order is forced and
-the no-trade audit remains the correct result. Never weaken a gate to manufacture
-a trade or P&L.
+the no-trade audit remains the correct result. The Sep 3 canary is a reviewed,
+versioned profile introduced before that session; never edit its gates after
+arming to manufacture a trade or P&L.
 
 ## 6. Arm one competition entry
+
+For September 3, complete this section before 09:30 ET while the account is
+flat. The worker will automatically begin the canary entry window at 09:45,
+cancel an unresolved entry by 10:50, begin a filled position's exit at 15:15,
+advance to the full-wing exit limit at 15:25, and target broker-flat state by
+15:45. Do not prompt the worker at those times.
 
 Stop the worker before changing its environment. Do not stop it later while an
 order or position may exist:
@@ -262,9 +270,11 @@ docker compose \
   stop worker
 ```
 
-Edit `/etc/thetatrap/competition.env` so the flags are exact opposites:
+Edit `/etc/thetatrap/competition.env` so the Sep 3 profile remains explicit and
+the flags are exact opposites:
 
 ```dotenv
+THETATRAP_STRATEGY_PROFILE=intraday_canary
 THETATRAP_READ_ONLY=false
 THETATRAP_EXECUTION_ENABLED=true
 ```
@@ -291,9 +301,9 @@ docker compose \
   -f compose.yaml -f compose.production.yaml \
   run --rm --no-deps worker \
   python -m thetatrap.cli entry-authorization arm \
-  --strategy-date 2026-09-02 \
-  --reason "approved competition paper entry" \
-  --confirm "ARM ONE PAPER ENTRY competition 2026-09-02 …ABC123"
+  --strategy-date 2026-09-03 \
+  --reason "approved Sep 3 Intraday Theta Canary" \
+  --confirm "ARM ONE PAPER ENTRY competition 2026-09-03 …ABC123"
 
 docker compose \
   --env-file /etc/thetatrap/competition.env \
@@ -301,7 +311,7 @@ docker compose \
   -f compose.yaml -f compose.production.yaml \
   run --rm --no-deps worker \
   python -m thetatrap.cli entry-authorization status \
-  --strategy-date 2026-09-02
+  --strategy-date 2026-09-03
 ```
 
 Then recreate the long-lived services so both dashboards show the armed flags:
@@ -315,8 +325,17 @@ docker compose \
 ```
 
 Never run `worker --once` while execution is enabled. Keep the worker alive
-through entry reconciliation, cancellation/repricing, the next-morning exit,
-and final broker-flat confirmation.
+through entry reconciliation, cancellation/repricing, the profile's scheduled
+exit, and final broker-flat confirmation.
+
+### September 3 observation checklist
+
+- **Before 09:30:** deployed Git SHA matches the reviewed release; backup is complete; containers are healthy; public HTTPS is reachable; preflight shows the intended paper account, level 3, flat positions, zero open orders, Basic IEX/indicative profile, and a valid MCP schema.
+- **Before 09:45:** the Sep 3 authorization is `ARMED`, kill switch is off, and the dashboard labels `Intraday Theta Canary`. Do not manually place an Alpaca order.
+- **09:45–10:45:** watch persisted QQQ/SPY scans, deterministic gates, and any Qwen MCP trace. The absence of an eligible candidate remains a valid no-trade outcome.
+- **10:50:** verify either a filled position exists or every entry order is terminally canceled. A submitted but unfilled order must not be described as a trade.
+- **15:15–15:45:** keep the worker running while it exits and reconciles. A broker `filled` status is not enough; require a later snapshot with zero positions and zero open orders.
+- **After 16:00:** export the report and compare its order, fill, position, and total-equity values with Alpaca before updating public claims.
 
 ## 7. Emergency operation
 
@@ -341,7 +360,7 @@ docker compose \
   -p thetatrap-competition \
   -f compose.yaml -f compose.production.yaml \
   exec -T worker python -m thetatrap.cli entry-authorization revoke \
-  --strategy-date 2026-09-02 --reason "operator canceled competition entry"
+  --strategy-date 2026-09-03 --reason "operator canceled competition entry"
 ```
 
 The kill switch blocks new exposure and asks the worker to cancel/reduce intact
