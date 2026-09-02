@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -498,6 +498,14 @@ async def test_filled_exit_replacement_waits_for_fresh_flat_snapshot(
         request=exit_arguments,
         broker_order_id="exit-broker-order",
     )
+    # Keep the fixture's order age deterministic. ``record_order_attempt`` uses
+    # the real wall clock, while this test intentionally drives the runtime with
+    # a fixed market timestamp.
+    with store.connect() as db_connection:
+        db_connection.execute(
+            "UPDATE order_attempts SET created_at=? WHERE attempt_id=?",
+            ((now - timedelta(seconds=31)).isoformat(), "exit-attempt"),
+        )
     store.transition_order_chain(
         "exit-chain", "PENDING", attempt_id="exit-attempt"
     )
