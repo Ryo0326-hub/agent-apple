@@ -9,8 +9,12 @@ import yaml
 from thetatrap.dashboard import display_build_sha as operator_build_sha
 from thetatrap.public_dashboard import (
     REDACTED,
+    _primary_execution_candidate,
+    _primary_execution_review,
+    _review_display_outcome,
     build_public_view,
     display_build_sha as public_build_sha,
+    serialize_public_evidence,
 )
 
 
@@ -291,6 +295,8 @@ def test_public_projection_recursively_removes_private_identifiers() -> None:
     assert view["mcp"]["status"] == "ready"
     assert view["orders"]["chain_count"] == 1
     assert view["orders"]["fill_count"] == 4
+    assert view["orders"]["fill_evidence"] == "NORMALIZED_LEG_FILLS"
+    assert view["orders"]["cash_flow_verified"] is True
     assert view["portfolio"]["observed_change"] == "70.00"
     assert [item["symbol"] for item in view["candidate"]["history"]] == [
         "SNOW",
@@ -381,6 +387,263 @@ def test_public_projection_labels_sep3_profile_without_exposing_run_context() ->
     assert "private-account" not in json.dumps(view)
 
 
+def test_public_projection_uses_broker_status_as_conservative_mleg_fill_evidence() -> (
+    None
+):
+    report = {
+        "strategy": {
+            "current_run": {
+                "run_id": "run-private",
+                "strategy_date": "2026-09-03",
+                "state": "POSITION_OPEN",
+            },
+            "run_history": [{"run_id": "run-private", "strategy_date": "2026-09-03"}],
+        },
+        "orders": {
+            "chain_count": 2,
+            "fill_count": 0,
+            "option_cash_flow_ex_fees": "0.00",
+            "chains": [
+                {
+                    "chain_id": "chain-private",
+                    "run_id": "run-private",
+                    "purpose": "entry",
+                    "state": "FILLED",
+                    "created_at": "2026-09-03T13:47:00Z",
+                    "payload": {
+                        "limit_price": "-0.82",
+                        "client_order_id": "order-private",
+                        "legs": [{"symbol": "QQQ260904P00711000"}],
+                    },
+                    "attempts": [
+                        {
+                            "attempt_id": "attempt-private",
+                            "created_at": "2026-09-03T13:46:29Z",
+                            "request": {"limit_price": "-0.82"},
+                        }
+                    ],
+                    "fills": [],
+                    "status_history": [
+                        {
+                            "event_kind": "broker_observation",
+                            "broker_status": "filled",
+                            "observed_at": "2026-09-03T13:47:20Z",
+                            "detail": {
+                                "filled_avg_price": "-0.82",
+                                "filled_qty": "1",
+                                "filled_at": "2026-09-03T13:47:19Z",
+                                "order_id": "broker-private",
+                                "legs": [
+                                    {
+                                        "symbol": "QQQ260904P00711000",
+                                        "side": "buy",
+                                        "position_intent": "buy_to_open",
+                                        "filled_qty": "1",
+                                        "filled_avg_price": "2.15",
+                                        "filled_at": "2026-09-03T13:47:19Z",
+                                        "status": "filled",
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "event_kind": "transition",
+                            "broker_status": "filled",
+                            "observed_at": "2026-09-03T13:47:20Z",
+                            "detail": {"reconciled": True},
+                        },
+                    ],
+                },
+                {
+                    "chain_id": "exit-chain-private",
+                    "run_id": "run-private",
+                    "purpose": "exit",
+                    "state": "FILLED",
+                    "created_at": "2026-09-03T19:15:00Z",
+                    "payload": {"limit_price": "0.90"},
+                    "attempts": [
+                        {
+                            "attempt_id": "exit-attempt-private",
+                            "created_at": "2026-09-03T19:15:08Z",
+                            "request": {"limit_price": "0.90"},
+                        },
+                        {
+                            "attempt_id": "exit-attempt-2-private",
+                            "created_at": "2026-09-03T19:16:10Z",
+                            "request": {"limit_price": "0.95"},
+                        },
+                    ],
+                    "fills": [],
+                    "status_history": [
+                        {
+                            "event_kind": "broker_observation",
+                            "broker_status": "filled",
+                            "observed_at": "2026-09-03T19:16:01Z",
+                            "detail": {
+                                "filled_avg_price": "0.95",
+                                "filled_qty": "1",
+                                "filled_at": "2026-09-03T19:16:00Z",
+                                "legs": [
+                                    {
+                                        "symbol": "QQQ260904P00711000",
+                                        "side": "sell",
+                                        "position_intent": "sell_to_close",
+                                        "filled_qty": "1",
+                                        "filled_avg_price": "0.62",
+                                        "filled_at": "2026-09-03T19:16:00Z",
+                                        "status": "filled",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            ],
+        },
+        "portfolio": {
+            "latest_position_observation": {
+                "is_flat": True,
+                "payload": [],
+            }
+        },
+    }
+
+    view = build_public_view(report)
+    chain = view["orders"]["chains"][0]
+    exit_chain = view["orders"]["chains"][1]
+
+    assert view["orders"]["broker_filled_order_count"] == 2
+    assert view["orders"]["fill_count"] == 0
+    assert view["orders"]["fill_evidence"] == "BROKER_ORDER_STATUS"
+    assert view["orders"]["cash_flow_verified"] is False
+    assert view["orders"]["broker_leg_fill_count"] == 2
+    assert view["orders"]["broker_mleg_cash_flow_ex_fees"] == "-13.00"
+    assert view["orders"]["broker_round_trip_confirmed"] is True
+    assert chain["initial_limit_price"] == "-0.82"
+    assert chain["final_limit_price"] == "-0.82"
+    assert chain["symbol"] == "QQQ"
+    assert chain["submitted_at"] == "2026-09-03T13:46:29Z"
+    assert chain["broker_fill_price"] == "-0.82"
+    assert chain["broker_filled_at"] == "2026-09-03T13:47:19Z"
+    assert len(chain["broker_leg_fills"]) == 1
+    assert exit_chain["initial_limit_price"] == "0.90"
+    assert exit_chain["final_limit_price"] == "0.95"
+    assert exit_chain["replacement_count"] == 1
+    assert exit_chain["broker_fill_price"] == "0.95"
+    assert exit_chain["broker_filled_at"] == "2026-09-03T19:16:00Z"
+    assert view["portfolio"]["position"] == "FLAT"
+    assert view["portfolio"]["position_count"] == 0
+    day = next(
+        item for item in view["competition_days"] if item["date"] == "2026-09-03"
+    )
+    assert day["outcome"] == "BROKER-CONFIRMED ROUND TRIP"
+    assert day["broker_filled_orders"] == 2
+    assert day["leg_fills"] == 0
+    serialized = serialize_public_evidence(view)
+    assert "chain-private" not in serialized
+    assert "order-private" not in serialized
+    assert "attempt-private" not in serialized
+    assert "broker-private" not in serialized
+
+
+def test_public_projection_does_not_infer_broker_fill_from_local_state() -> None:
+    report = {
+        "strategy": {
+            "current_run": {
+                "run_id": "run-private",
+                "strategy_date": "2026-09-03",
+                "state": "POSITION_OPEN",
+            },
+            "run_history": [{"run_id": "run-private", "strategy_date": "2026-09-03"}],
+        },
+        "orders": {
+            "chains": [
+                {
+                    "run_id": "run-private",
+                    "purpose": "entry",
+                    "state": "FILLED",
+                    "fills": [],
+                    "status_history": [
+                        {
+                            "event_kind": "transition",
+                            "to_state": "FILLED",
+                            "broker_status": None,
+                            "observed_at": "2026-09-03T13:47:20Z",
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    view = build_public_view(report)
+
+    assert view["orders"]["broker_filled_order_count"] == 0
+    assert view["orders"]["fill_evidence"] == "NONE"
+    assert view["orders"]["chains"][0]["broker_fill_confirmed"] is False
+
+
+def test_sep3_successful_qqq_review_is_primary_and_policy_error_is_explained() -> None:
+    report = {
+        "strategy": {
+            "current_run": {
+                "run_id": "run-private",
+                "strategy_date": "2026-09-03",
+                "state": "POSITION_OPEN",
+            },
+            "run_history": [{"run_id": "run-private", "strategy_date": "2026-09-03"}],
+        },
+        "candidate": {
+            "history": [
+                {
+                    "run_id": "run-private",
+                    "strategy_date": "2026-09-03",
+                    "symbol": "QQQ",
+                    "candidate_rank": 2,
+                    "eligible": True,
+                    "scanned_at": "2026-09-03T13:47:00Z",
+                    "payload": {"proposed_credit": "0.82"},
+                }
+            ]
+        },
+        "agent": {
+            "reviews": [
+                {
+                    "strategy_date": "2026-09-03",
+                    "symbol": "SPY",
+                    "candidate_rank": 1,
+                    "status": "FAILED",
+                    "error_type": "PolicyError",
+                    "ended_at": "2026-09-03T13:46:00Z",
+                },
+                {
+                    "strategy_date": "2026-09-03",
+                    "symbol": "QQQ",
+                    "candidate_rank": 2,
+                    "status": "COMPLETED",
+                    "result": {"decision": "ALLOW"},
+                    "ended_at": "2026-09-03T13:47:00Z",
+                    "tool_trace": [{"tool_name": "get_candidate", "status": "ok"}],
+                },
+            ]
+        },
+        "orders": {"chains": []},
+    }
+
+    view = build_public_view(report)
+    primary = _primary_execution_review(view)
+    selected = _primary_execution_candidate(view)
+
+    assert primary["symbol"] == "QQQ"
+    assert primary["decision"] == "ALLOW"
+    assert view["agent"]["status"] == "COMPLETED"
+    assert view["agent"]["decision"] == "ALLOW"
+    assert view["agent"]["error_type"] is None
+    assert selected["symbol"] == "QQQ"
+    spy = next(item for item in view["agent"]["reviews"] if item["symbol"] == "SPY")
+    assert _review_display_outcome(spy) == "SAFETY GATEWAY BLOCKED"
+
+
 def test_public_source_has_no_storage_or_operator_control_surface() -> None:
     source_path = ROOT / "src" / "thetatrap" / "public_dashboard.py"
     source = source_path.read_text(encoding="utf-8")
@@ -424,18 +687,26 @@ def test_public_source_has_no_storage_or_operator_control_surface() -> None:
     assert '@st.fragment(run_every="30s")' in source
     assert "Worker evidence is stale or missing" in source
     assert "All-symbol scan matrix" in source
-    assert "Read-only rejected-candidate advisories" in source
-    assert "NON-CONSOLIDATED DATA PROFILE" in source
+    assert "Rejected-candidate advisories are read-only" in source
+    assert "BASIC INDICATIVE OPTIONS DATA" in source
     assert "no mutation callbacks" in source
     assert "prefers-color-scheme: dark" in source
     assert "--tt-card: #17241e" in source
     assert '[data-testid="stMetricValue"] p' in source
-    assert "Equity remained unchanged across" in source
     assert "Intraday Theta Canary" in source
-    assert "Sep 1–2 evidence" in source
-    assert "Root cause" in source
-    assert "Complete audit trail" in source
     assert "not an automatic fallback" in source
+    assert "SAFETY GATEWAY BLOCKED" in source
+    assert "Download sanitized public evidence (JSON)" in source
+    headings = [
+        "00 · RESULT SNAPSHOT",
+        "01 · PROBLEM & STRATEGY",
+        "02 · AI + ALPACA MCP PROOF",
+        "03 · VERIFIED RESULTS",
+        "04 · SAFETY & ROBUSTNESS",
+        "05 · LIMITATIONS & EVIDENCE",
+    ]
+    offsets = [source.index(heading) for heading in headings]
+    assert offsets == sorted(offsets)
 
 
 def test_build_revisions_are_strictly_bounded() -> None:

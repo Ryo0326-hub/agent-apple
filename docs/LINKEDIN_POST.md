@@ -1,25 +1,25 @@
-# LinkedIn draft
+# LinkedIn final reflection draft
 
-The post body is intentionally kept between 220 and 300 words, excluding these instructions, links, and hashtags. Paraphrase it into the author's own voice and replace the marked result before publishing.
+Paraphrase this into your own voice and use LinkedIn's mention picker to tag **lablab.ai** and **Alpaca** before publishing.
 
-I started the Alpaca AI Trading Agents Hackathon with an idea from a YouTube video: earnings can make options expensive, so perhaps a defined-risk trade could collect that premium.
+I just completed the trading portion of the Alpaca AI Trading Agents Hackathon with ThetaTrap, an autonomous paper-options agent built with Qwen and Alpaca's official MCP server.
 
-The strategy was easy to describe. Building an agent that could execute it safely was much harder.
+My original idea came from a YouTube video about selling expensive option premium around earnings. The idea sounded simple, but reliable execution was the real challenge.
 
-ThetaTrap separates judgment from control. Featherless-hosted Qwen calls Alpaca tools to inspect account, market, order, position, and news evidence. It may veto a candidate or issue the exact approved order call. Deterministic Python chooses every leg and number, enforces one-contract risk, and manages reconciliation and exit. Every Alpaca interaction goes through the official MCP server.
+During the first two trading days, ThetaTrap evaluated 314 earnings candidates. None passed every safety and liquidity check, mainly because Alpaca Basic's indicative options data often lacked usable four-leg quotes or current open-interest information. The agent stayed flat instead of forcing a trade.
 
-The first two official days taught me something important. Across seven earnings symbols, the worker recorded 314 deterministic evaluations. Alpaca Basic's indicative data repeatedly had stale open-interest metadata or unusable quotes across one of the four required legs. No candidate passed every gate, so the system made zero broker attempts and stayed flat at $100,000.
+For the final day, I transparently adapted the system into a small intraday QQQ/SPY test. Qwen's first SPY attempt skipped a required evidence tool, so the deterministic gateway blocked it before Alpaca received an order. Qwen then completed all required calls for QQQ and submitted the exact approved four-leg trade through MCP.
 
-I kept that result visible instead of pretending a replay was a real trade. I then made one transparent, date-scoped adaptation for September 3: an Intraday Theta Canary using QQQ or SPY, exact $1 wings, at least $0.20 credit, at most $80 defined loss, and a same-day exit. It is not an automatic fallback or a claim of proven alpha.
+The QQQ position opened for a $0.82 credit, closed automatically for a $0.95 debit, and was confirmed flat by 3:17 PM. My $100,000 paper account finished at $99,986.80: a $13.20 loss.
 
-The final release includes a tested one-shot authorization, restart recovery, broker reconciliation, automatic exit, and separate private/public Streamlit dashboards. Judges can follow the original thesis, every failed gate, the pivot, Qwen's MCP trace, and any real order or P&L.
+I did not prove a profitable strategy, but I did prove the full agent workflow: autonomous screening, real LLM tool use, bounded execution, and restart-safe reconciliation and exit.
 
-**Add the final September 3 broker-reconciled outcome here before publishing.**
+Next, I would test with OPRA-quality data, longer backtests, realistic costs, and stronger model tool-sequencing evaluations.
 
-This remains paper trading with non-consolidated indicative data. Next, I would test on OPRA-quality data, include realistic transaction costs, and evaluate the strategy and Qwen vetoes over many more market events.
-
-Project: **PRE-SUBMISSION — add LabLab URL**
+Thank you to **lablab.ai** and **Alpaca** for the challenge.
 
 Code: https://github.com/Ryo0326-hub/agent-apple
 
-#AIAgents #Fintech #OptionsTrading #MCP #Alpaca #OpenSourceAI
+Demo: https://104-236-77-186.sslip.io/
+
+#AIAgents #Fintech #OptionsTrading #MCP #Alpaca #BuildInPublic

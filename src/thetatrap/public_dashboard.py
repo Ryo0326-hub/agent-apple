@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from collections import Counter
@@ -38,6 +39,7 @@ UUID_PATTERN = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b"
 )
 PAPER_ACCOUNT_PATTERN = re.compile(r"\bPA[A-Z0-9]{8,}\b")
+OPTION_SYMBOL_PATTERN = re.compile(r"^([A-Z]+)\d{6}[CP]\d{8}$")
 CANARY_STRATEGY_DATE = "2026-09-03"
 CANARY_PROFILE_ID = "sep3_intraday_theta_canary_v1"
 CANARY_PROFILE = {
@@ -102,6 +104,18 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
     orders = _mapping(report.get("orders"))
     portfolio = _mapping(report.get("portfolio"))
     position = _mapping(portfolio.get("latest_position_observation"))
+    current_positions = [
+        {
+            "symbol": item.get("symbol"),
+            "side": item.get("side"),
+            "quantity": item.get("qty") or item.get("quantity"),
+            "average_entry_price": item.get("avg_entry_price"),
+            "current_price": item.get("current_price"),
+            "market_value": item.get("market_value"),
+            "unrealized_pnl": item.get("unrealized_pl"),
+        }
+        for item in map(_mapping, _sequence(position.get("payload")))
+    ]
     equity = _mapping(portfolio.get("equity"))
     kill = _mapping(report.get("kill_switch"))
     one_shot = _mapping(report.get("one_shot_entry"))
@@ -124,14 +138,70 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         attempts = _sequence(chain.get("attempts"))
         chain_fills = _sequence(chain.get("fills"))
         status_history = _sequence(chain.get("status_history"))
+        intent_payload = _mapping(chain.get("payload"))
+        intent_legs = [_mapping(leg) for leg in _sequence(intent_payload.get("legs"))]
+        broker_fill_observations = [
+            _mapping(status)
+            for status in status_history
+            if str(_mapping(status).get("broker_status") or "").lower() == "filled"
+        ]
+        broker_fill_observation = next(
+            (
+                status
+                for status in reversed(broker_fill_observations)
+                if str(status.get("event_kind") or "").lower() == "broker_observation"
+            ),
+            broker_fill_observations[-1] if broker_fill_observations else {},
+        )
+        broker_fill_detail = _mapping(broker_fill_observation.get("detail"))
+        broker_fill_confirmed = bool(broker_fill_observation)
+        attempt_rows = [_mapping(attempt) for attempt in attempts]
+        initial_request = (
+            _mapping(attempt_rows[0].get("request")) if attempt_rows else {}
+        )
+        final_request = (
+            _mapping(attempt_rows[-1].get("request")) if attempt_rows else {}
+        )
+        broker_leg_fills = [
+            {
+                "symbol": leg.get("symbol"),
+                "side": leg.get("side"),
+                "position_intent": leg.get("position_intent"),
+                "quantity": leg.get("filled_qty"),
+                "price": leg.get("filled_avg_price"),
+                "filled_at": leg.get("filled_at"),
+            }
+            for leg in map(_mapping, _sequence(broker_fill_detail.get("legs")))
+            if str(leg.get("status") or "").lower() == "filled"
+            and leg.get("filled_avg_price") not in (None, "")
+        ]
         chains.append(
             {
                 "strategy_date": run_dates.get(str(chain.get("run_id"))),
+                "symbol": _option_underlying(
+                    intent_legs[0].get("symbol") if intent_legs else None
+                ),
                 "purpose": chain.get("purpose"),
                 "state": chain.get("state"),
+                "initial_limit_price": initial_request.get("limit_price")
+                or intent_payload.get("limit_price"),
+                "final_limit_price": final_request.get("limit_price")
+                or intent_payload.get("limit_price"),
                 "created_at": chain.get("created_at"),
+                "submitted_at": (
+                    attempt_rows[0].get("created_at") if attempt_rows else None
+                ),
                 "updated_at": chain.get("updated_at"),
+                "broker_filled_at": (
+                    broker_fill_detail.get("filled_at")
+                    or broker_fill_observation.get("observed_at")
+                ),
+                "broker_fill_price": broker_fill_detail.get("filled_avg_price"),
+                "broker_filled_quantity": broker_fill_detail.get("filled_qty"),
+                "broker_fill_confirmed": broker_fill_confirmed,
+                "broker_leg_fills": broker_leg_fills,
                 "attempt_count": len(attempts),
+                "replacement_count": max(0, len(attempts) - 1),
                 "fill_count": len(chain_fills),
             }
         )
@@ -184,6 +254,7 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         _public_review(_mapping(item), kind="READ_ONLY_ADVISORY")
         for item in _sequence(agent.get("advisories"))
     ]
+    primary_agent_review = _select_primary_execution_review(reviews)
     agent_timeline: list[dict[str, Any]] = []
     for review in reviews + advisories:
         for tool in _sequence(review.get("tool_trace")):
@@ -235,6 +306,24 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
     ]
     safety_kill = _mapping(safety.get("kill_switch")) or kill
 
+    broker_filled_order_count = sum(
+        1 for chain in chains if chain.get("broker_fill_confirmed") is True
+    )
+    broker_leg_fills = [
+        {"purpose": chain.get("purpose"), **dict(_mapping(fill))}
+        for chain in chains
+        for fill in _sequence(chain.get("broker_leg_fills"))
+    ]
+    broker_mleg_cash_flow = _broker_mleg_cash_flow(chains)
+    broker_filled_purposes = {
+        str(chain.get("purpose") or "").lower()
+        for chain in chains
+        if chain.get("broker_fill_confirmed") is True
+    }
+    broker_round_trip_confirmed = {"entry", "exit"}.issubset(
+        broker_filled_purposes
+    ) and position.get("is_flat") is True
+    normalized_fill_count = len(fills)
     public = {
         "mode": {
             "environment": mode.get("environment"),
@@ -290,15 +379,27 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
             "history": scan_history,
         },
         "agent": {
-            "model": latest_agent.get("model"),
-            "status": latest_agent.get("status"),
+            "model": primary_agent_review.get("model") or latest_agent.get("model"),
+            "status": primary_agent_review.get("status") or latest_agent.get("status"),
             "decision": (
-                _mapping(latest_agent.get("result")).get("decision")
+                primary_agent_review.get("decision")
+                or _mapping(latest_agent.get("result")).get("decision")
                 or _mapping(latest_agent.get("result")).get("outcome")
                 or latest_agent.get("veto_reason")
             ),
-            "veto_reason": latest_agent.get("veto_reason"),
-            "error_type": latest_agent.get("error_type"),
+            "veto_reason": (
+                primary_agent_review.get("reason")
+                if primary_agent_review
+                else latest_agent.get("veto_reason")
+            ),
+            "error_type": (
+                primary_agent_review.get("reason")
+                if primary_agent_review
+                and str(primary_agent_review.get("status") or "").upper() == "FAILED"
+                else latest_agent.get("error_type")
+                if not primary_agent_review
+                else None
+            ),
             "tool_trace": trace,
             "reviews": reviews,
             "advisories": advisories,
@@ -306,7 +407,20 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
         },
         "orders": {
             "chain_count": orders.get("chain_count", 0),
-            "fill_count": orders.get("fill_count", 0),
+            "fill_count": normalized_fill_count,
+            "broker_filled_order_count": broker_filled_order_count,
+            "broker_leg_fill_count": len(broker_leg_fills),
+            "broker_leg_fills": broker_leg_fills,
+            "broker_mleg_cash_flow_ex_fees": broker_mleg_cash_flow,
+            "broker_round_trip_confirmed": broker_round_trip_confirmed,
+            "fill_evidence": (
+                "NORMALIZED_LEG_FILLS"
+                if normalized_fill_count
+                else "BROKER_ORDER_STATUS"
+                if broker_filled_order_count
+                else "NONE"
+            ),
+            "cash_flow_verified": normalized_fill_count > 0,
             "option_cash_flow_ex_fees": orders.get("option_cash_flow_ex_fees", "0.00"),
             "chains": chains,
             "timeline": sorted(
@@ -322,6 +436,8 @@ def build_public_view(report: Mapping[str, Any]) -> dict[str, Any]:
                 if position
                 else "UNKNOWN"
             ),
+            "position_count": len(current_positions),
+            "positions": current_positions,
             "first_equity": equity.get("first"),
             "latest_equity": equity.get("latest"),
             "observed_change": equity.get("observed_change"),
@@ -703,6 +819,14 @@ def _competition_day_summaries(view: Mapping[str, Any]) -> list[dict[str, Any]]:
         day_fills = [
             item for item in fills if item.get("strategy_date") == strategy_date
         ]
+        broker_filled_orders = sum(
+            1 for item in day_chains if item.get("broker_fill_confirmed") is True
+        )
+        broker_filled_purposes = {
+            str(item.get("purpose") or "").lower()
+            for item in day_chains
+            if item.get("broker_fill_confirmed") is True
+        }
         failures = Counter(
             str(gate)
             for scan in day_scans
@@ -712,6 +836,10 @@ def _competition_day_summaries(view: Mapping[str, Any]) -> list[dict[str, Any]]:
         eligible = sum(1 for item in day_scans if item.get("eligible") is True)
         if day_fills:
             outcome = "FILLS RECORDED"
+        elif {"entry", "exit"}.issubset(broker_filled_purposes):
+            outcome = "BROKER-CONFIRMED ROUND TRIP"
+        elif broker_filled_orders:
+            outcome = "BROKER-CONFIRMED MLEG FILL"
         elif day_chains:
             outcome = "ORDER LIFECYCLE RECORDED"
         elif day_scans and eligible == 0:
@@ -734,6 +862,7 @@ def _competition_day_summaries(view: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "qwen_decisions": len(day_reviews),
                 "qwen_advisories": len(day_advisories),
                 "order_chains": len(day_chains),
+                "broker_filled_orders": broker_filled_orders,
                 "leg_fills": len(day_fills),
                 "top_gate_failures": ", ".join(
                     f"{name} ({count})" for name, count in failures.most_common(3)
@@ -1021,556 +1150,491 @@ def _render_live_report() -> None:
         st.stop()
 
     view = build_public_view(report)
-    configured_profile = os.environ.get("THETATRAP_STRATEGY_PROFILE", "earnings")
-    _render_status(view)
-    _render_judge_story(
-        view,
-        configured_profile=configured_profile,
-    )
-    _render_strategy(view)
-    _render_agent(view)
-    _render_activity_history(view)
-    _render_orders_and_portfolio(view)
-    _render_safety(view, configured_profile=configured_profile)
-    _render_limitations(view)
+    _render_result_snapshot(view)
+    _render_problem_and_strategy(view)
+    _render_ai_mcp_proof(view)
+    _render_verified_results(view)
+    _render_safety_and_robustness(view)
+    _render_limitations_and_evidence(view)
 
 
-def _render_status(view: Mapping[str, Any]) -> None:
+def _render_result_snapshot(view: Mapping[str, Any]) -> None:
     mode = _mapping(view.get("mode"))
     health = _mapping(view.get("health"))
     mcp = _mapping(view.get("mcp"))
-    emergency = _mapping(view.get("emergency"))
-    account = _mapping(view.get("account"))
-    permission = _mapping(view.get("one_shot_entry"))
-    data_profile = _mapping(view.get("data_profile"))
+    strategy = _mapping(view.get("strategy"))
+    portfolio = _mapping(view.get("portfolio"))
+    primary_review = _primary_execution_review(view)
 
+    _section_heading(
+        "00 · RESULT SNAPSHOT",
+        "The outcome, before the implementation details",
+        "Current broker and agent evidence from the competition account. Values refresh every 30 seconds.",
+    )
     banner = escape(str(mode.get("banner") or "PAPER · TRADING DISARMED"))
     armed = mode.get("trading_state") == "ARMED"
-    detail = (
-        "date-bound paper entry permission is active"
-        if armed
-        else "new paper entries are currently blocked"
-    )
     st.markdown(
-        f'<div class="tt-live{" armed" if armed else ""}">{banner} · {detail}</div>',
+        f'<div class="tt-live{" armed" if armed else ""}">{banner}</div>',
         unsafe_allow_html=True,
     )
-
     columns = st.columns(6)
-    columns[0].metric("Worker", str(health.get("status", "unknown")).upper())
-    columns[1].metric(
-        "Market",
+    columns[0].metric("Final run state", strategy.get("state", "NOT_STARTED"))
+    position_label = str(portfolio.get("position", "UNKNOWN"))
+    if position_label == "OPEN" and portfolio.get("position_count"):
+        position_label += f" · {portfolio['position_count']} legs"
+    columns[1].metric("Position", position_label)
+    columns[2].metric("Starting equity", _money(portfolio.get("first_equity")))
+    columns[3].metric("Latest equity", _money(portfolio.get("latest_equity")))
+    columns[4].metric(
+        "Observed P&L", _money(portfolio.get("observed_change"), signed=True)
+    )
+    columns[5].metric("Qwen result", _review_display_outcome(primary_review))
+
+    market = (
         "OPEN"
         if health.get("market_is_open") is True
         else "CLOSED"
         if health.get("market_is_open") is False
-        else "UNKNOWN",
+        else "UNKNOWN"
     )
-    columns[2].metric("MCP", str(mcp.get("status", "unknown")).upper())
-    columns[3].metric("Account", account.get("suffix", "unverified"))
-    columns[4].metric("Entry permit", permission.get("state", "MISSING"))
-    columns[5].metric(
-        "Kill switch",
-        "ON"
-        if emergency.get("enabled")
-        else "OFF"
-        if emergency.get("known")
-        else "UNKNOWN",
+    heartbeat_age = health.get("heartbeat_age_seconds")
+    freshness = (
+        f"{int(heartbeat_age)}s old"
+        if isinstance(heartbeat_age, (int, float))
+        else "unavailable"
     )
     st.caption(
-        f"{str(mode.get('environment', 'unknown')).upper()} · "
-        f"{str(data_profile.get('provider') or 'Alpaca').upper()} "
-        f"{str(data_profile.get('plan') or 'Basic').upper()} · "
-        f"stock {data_profile.get('stock_feed') or 'IEX'} · "
-        f"options {data_profile.get('option_feed') or 'indicative'} · "
-        f"heartbeat {health.get('observed_at') or 'not observed'}"
-    )
-    st.markdown(
-        '<span class="tt-profile">NON-CONSOLIDATED DATA PROFILE · IEX STOCK · '
-        "INDICATIVE OPTIONS</span>",
-        unsafe_allow_html=True,
+        f"Worker {str(health.get('status') or 'unknown').upper()} · "
+        f"MCP {str(mcp.get('status') or 'unknown').upper()} · market {market} · "
+        f"heartbeat {health.get('observed_at') or 'not observed'} ({freshness}) · "
+        f"last successful MCP call {mcp.get('last_successful_call_at') or 'not observed'}"
     )
     if health.get("stale"):
-        age = health.get("heartbeat_age_seconds")
-        detail = f" ({int(age)} seconds old)" if isinstance(age, (int, float)) else ""
         st.warning(
-            "Worker evidence is stale or missing"
-            + detail
-            + "; do not treat the displayed state as current."
+            "Worker evidence is stale or missing; do not treat the displayed state as current."
         )
-    if permission.get("strategy_date"):
-        st.caption(f"Active permission date: {permission.get('strategy_date')}")
 
 
-def _render_judge_story(
-    view: Mapping[str, Any], *, configured_profile: str = "earnings"
-) -> None:
+def _render_problem_and_strategy(view: Mapping[str, Any]) -> None:
     strategy = _mapping(view.get("strategy"))
-    permission = _mapping(view.get("one_shot_entry"))
-    day_rows = _sequence(view.get("competition_days"))
+    profile = _mapping(strategy.get("profile"))
     _section_heading(
-        "00 · Competition journey",
-        "One thesis, observed constraints, one transparent pivot",
-        "The strategy change is part of the audit trail: it is neither hidden nor presented as evidence of a proven trading edge.",
+        "01 · PROBLEM & STRATEGY",
+        "Sell bounded premium only when the evidence is usable",
+        "ThetaTrap started with earnings volatility, then introduced one transparent Sep 3 canary after the Basic feed repeatedly failed complete four-leg gates.",
     )
-
-    cards = st.columns(4)
+    cards = st.columns(3)
     cards[0].markdown(
-        '<div class="tt-role"><h4>1 · Original thesis</h4><p>Sell unusually rich '
-        "earnings premium with a one-contract, defined-risk iron condor after "
-        "every event, quote, liquidity, and risk gate passes.</p></div>",
+        '<div class="tt-role"><h4>Problem</h4><p>Options premium can be rich around '
+        "events, but weak quotes, timing mistakes, and unbounded execution risk can "
+        "erase the thesis.</p></div>",
         unsafe_allow_html=True,
     )
     cards[1].markdown(
-        '<div class="tt-role"><h4>2 · Sep 1–2 evidence</h4><p>The worker scanned '
-        "every scheduled symbol automatically. No complete candidate passed, so "
-        "the account stayed flat and no order was forced.</p></div>",
+        '<div class="tt-role"><h4>Original strategy</h4><p>A one-contract, defined-risk '
+        "earnings iron condor proceeds only after event, quote, liquidity, and loss "
+        "gates all pass.</p></div>",
         unsafe_allow_html=True,
     )
     cards[2].markdown(
-        '<div class="tt-role"><h4>3 · Root cause</h4><p>IEX stock and indicative '
-        "options data are not consolidated SIP/OPRA feeds. Stale open-interest "
-        "dates and unusable four-leg quotes repeatedly failed hard gates.</p></div>",
+        '<div class="tt-role"><h4>Sep 3 adaptation</h4><p>The date-scoped QQQ/SPY '
+        "Intraday Theta Canary uses a liquid universe and a same-day exit while "
+        "retaining deterministic construction and risk.</p></div>",
         unsafe_allow_html=True,
     )
-    cards[3].markdown(
-        '<div class="tt-role"><h4>4 · Sep 3 response</h4><p>A date-scoped intraday '
-        "QQQ/SPY canary targets a more liquid universe and a same-day round trip, "
-        "while retaining one contract and deterministic risk control.</p></div>",
-        unsafe_allow_html=True,
-    )
-
-    observed_rows = [
-        item
-        for item in map(_mapping, day_rows)
-        if item.get("scans") or item.get("date") == CANARY_STRATEGY_DATE
-    ]
-    st.markdown("#### Official strategy-day evidence")
-    st.dataframe(observed_rows, width="stretch", hide_index=True)
-    st.caption(
-        "A Qwen advisory is real read-only agent activity, but it is not an "
-        "execution decision and cannot reverse a deterministic rejection."
-    )
-
-    profile = dict(CANARY_PROFILE)
-    reported = _mapping(strategy.get("profile"))
-    if reported.get("profile_id") == CANARY_PROFILE_ID:
-        profile.update(
-            {
-                key: value
-                for key, value in reported.items()
-                if key
-                in {
-                    *profile,
-                    "activation_reason",
-                    "profitability_claim",
-                    "profile_kind",
-                }
-                and value not in (None, "")
-            }
+    if profile.get("profile_id") == CANARY_PROFILE_ID:
+        st.markdown(
+            '<div class="tt-pivot"><strong>Active profile: Intraday Theta Canary</strong><br>'
+            "Competition-only adaptation—not an automatic fallback and not a claim "
+            "of proven profitability.</div>",
+            unsafe_allow_html=True,
         )
-    strategy_state = str(strategy.get("state") or "NOT_STARTED")
-    canary_day = datetime.fromisoformat(CANARY_STRATEGY_DATE).date()
-    market_day = datetime.now(UTC).astimezone(ZoneInfo("America/New_York")).date()
-    if strategy.get("strategy_date") == CANARY_STRATEGY_DATE:
-        if strategy_state in {"FLAT", "NO_TRADE"}:
-            profile_status = f"COMPLETED · {strategy_state}"
-        elif market_day > canary_day:
-            profile_status = f"POST-RUN ATTENTION · {strategy_state}"
-        else:
-            profile_status = f"LIVE RUN · {strategy_state}"
-    elif permission.get("strategy_date") == CANARY_STRATEGY_DATE and permission.get(
-        "active"
-    ):
-        profile_status = "AUTHORIZED · WAITING FOR WINDOW"
-    elif configured_profile.strip().lower() == "intraday_canary":
-        profile_status = "DEPLOYED · WAITING FOR SEP 3 RUN EVIDENCE"
-    else:
-        profile_status = "PLANNED · NOT THE DEPLOYED PROFILE"
-    st.markdown(
-        '<div class="tt-pivot"><strong>Sep 3 profile status: '
-        f"{escape(profile_status)}</strong><br>Competition-only adaptation; it is "
-        "not an automatic fallback for ordinary earnings scans.</div>",
-        unsafe_allow_html=True,
-    )
-    if profile.get("activation_reason"):
-        st.caption(f"Activation reason: {profile['activation_reason']}")
     st.dataframe(
         [
-            {"control": "Universe", "frozen value": profile["universe"]},
-            {"control": "Expiration", "frozen value": profile["expiration"]},
+            {"control": "Universe", "frozen value": profile.get("universe")},
+            {"control": "Expiration", "frozen value": profile.get("expiration")},
+            {"control": "Entry window", "frozen value": profile.get("entry_window")},
             {
-                "control": "Entry / cancel",
-                "frozen value": f"{profile['entry_window']} / {profile['cancel_at']}",
+                "control": "Cancel / exit",
+                "frozen value": (
+                    f"cancel {profile.get('cancel_at') or 'n/a'} · exit starts "
+                    f"{profile.get('exit_start') or 'n/a'} · flat target "
+                    f"{profile.get('flat_target') or 'n/a'}"
+                ),
             },
+            {"control": "Structure", "frozen value": profile.get("structure")},
             {
-                "control": "Exit",
-                "frozen value": f"start {profile['exit_start']} · full-wing {profile['aggressive_exit_at']} · flat target {profile['flat_target']}",
-            },
-            {"control": "Structure", "frozen value": profile["structure"]},
-            {
-                "control": "Credit / max loss",
-                "frozen value": f"minimum {profile['minimum_credit']} · at most {profile['maximum_defined_loss']}",
-            },
-            {
-                "control": "Qwen cadence",
-                "frozen value": profile["qwen_cadence"],
+                "control": "Risk",
+                "frozen value": profile.get("maximum_defined_loss"),
             },
         ],
         width="stretch",
         hide_index=True,
     )
 
-    st.markdown("#### Who controls what")
+
+def _render_ai_mcp_proof(view: Mapping[str, Any]) -> None:
+    agent = _mapping(view.get("agent"))
+    mcp = _mapping(view.get("mcp"))
+    primary = _primary_execution_review(view)
+    reviews = [_mapping(item) for item in _sequence(agent.get("reviews"))]
+    advisories = [_mapping(item) for item in _sequence(agent.get("advisories"))]
+    _section_heading(
+        "02 · AI + ALPACA MCP PROOF",
+        "Qwen reasoned over bounded, auditable tools",
+        "The model reviewed an immutable deterministic candidate. It could inspect evidence and allow or veto, but it could not change the symbol, legs, quantity, price, or risk limit.",
+    )
     st.dataframe(
         [
             {
                 "component": "Qwen via Featherless",
-                "can": "Call bounded Alpaca MCP reads; inspect account, clock, positions, orders and news; veto or issue the exact frozen entry call",
-                "cannot": "Choose or alter symbol, expiration, strikes, quantity, price, maximum loss, exits, or a failed gate",
+                "responsibility": "Read Alpaca MCP evidence; explain; allow or veto the frozen candidate",
+                "cannot do": "Change strikes, size, order price, risk budget, exits, or failed gates",
             },
             {
                 "component": "Deterministic Python",
-                "can": "Rank quote quality; construct all four legs; calculate risk; revalidate; authorize; reconcile; cancel; reprice; exit",
-                "cannot": "Invent missing data, bypass Alpaca MCP, exceed the profile, or claim profitability from one paper result",
+                "responsibility": "Construct, gate, authorize, submit, reconcile, cancel, and exit",
+                "cannot do": "Invent missing data or exceed the frozen profile",
             },
         ],
         width="stretch",
         hide_index=True,
     )
-
-
-def _render_strategy(view: Mapping[str, Any]) -> None:
-    strategy = _mapping(view.get("strategy"))
-    candidate = _mapping(view.get("candidate"))
-    _section_heading(
-        "01 · Deterministic engine",
-        "Every symbol, every scan",
-        "The matrix includes configured exclusions and every persisted candidate evaluation—not only the latest or selected fallback.",
-    )
-    columns = st.columns(5)
-    columns[0].metric("Strategy state", strategy.get("state", "NOT_STARTED"))
-    columns[1].metric("Strategy date", strategy.get("strategy_date") or "none")
-    columns[2].metric("Evaluations", len(_sequence(candidate.get("history"))))
-    columns[3].metric(
-        "Eligible scans",
-        sum(
-            1
-            for item in _sequence(candidate.get("history"))
-            if _mapping(item).get("eligible")
-        ),
-    )
-    columns[4].metric("Run history", strategy.get("run_count", 0))
-    if strategy.get("no_trade_reason"):
-        st.warning(f"NO_TRADE · {strategy['no_trade_reason']}")
-
-    matrix = _sequence(candidate.get("scan_matrix"))
-    st.markdown("#### All-symbol scan matrix")
-    if matrix:
-        st.dataframe(matrix, width="stretch", hide_index=True)
-    else:
-        st.info(
-            "The frozen event universe is loaded; no symbol scan has been published yet."
+    if primary:
+        trace = [_mapping(item) for item in _sequence(primary.get("tool_trace"))]
+        official_mcp_count = sum(
+            1 for item in trace if item.get("kind") == "official MCP"
         )
-
-    history = _sequence(candidate.get("history"))
-    st.markdown("#### Candidate and gate history")
-    if not history:
-        st.info("No deterministic candidate evaluation has been persisted yet.")
+        columns = st.columns(5)
+        columns[0].metric("Candidate", primary.get("symbol") or "unknown")
+        columns[1].metric("Model", _model_label(primary.get("model")))
+        columns[2].metric("Run status", primary.get("status") or "unknown")
+        columns[3].metric("Decision", _review_display_outcome(primary))
+        columns[4].metric("Official MCP", f"{official_mcp_count} of {len(trace)} calls")
+        st.success(
+            f"Primary execution review: {primary.get('strategy_date') or 'unknown date'} "
+            f"{primary.get('symbol') or 'candidate'} · "
+            f"{_review_display_outcome(primary)}. Qwen's final call was the exact "
+            "`place_option_order`; the deterministic gateway rechecked policy before "
+            "broker submission."
+        )
+        if trace:
+            st.markdown("#### Successful Qwen → Alpaca MCP tool sequence")
+            st.dataframe(
+                [
+                    {
+                        "step": step,
+                        "source": item.get("kind"),
+                        "tool": item.get("tool"),
+                        "result": item.get("status"),
+                    }
+                    for step, item in enumerate(trace, start=1)
+                ],
+                width="stretch",
+                hide_index=True,
+            )
     else:
+        st.info("No completed Qwen execution review has been persisted yet.")
+
+    policy_blocks = [item for item in reviews if _is_policy_gateway_block(item)]
+    if policy_blocks:
+        st.info(
+            "Safety gateway evidence: the SPY Qwen attempt raised PolicyError because "
+            "its required read sequence was incomplete. The gateway blocked it before "
+            "broker mutation; the worker then evaluated the next ranked candidate."
+        )
         st.dataframe(
             [
                 {
-                    "scanned_at": item.get("scanned_at"),
                     "date": item.get("strategy_date"),
                     "symbol": item.get("symbol"),
-                    "result": item.get("result"),
-                    "rank": item.get("rank"),
-                    "failed_gates": ", ".join(
-                        str(value) for value in _sequence(item.get("failed_gates"))
-                    ),
-                    "iv_ratio": item.get("iv_ratio"),
-                    "expected_move": item.get("expected_move"),
-                    "credit": item.get("proposed_credit"),
-                    "max_loss": item.get("maximum_loss"),
+                    "outcome": "SAFETY GATEWAY BLOCKED",
+                    "reason": item.get("reason"),
+                    "ended_at": item.get("ended_at"),
                 }
-                for item in map(_mapping, history)
+                for item in policy_blocks
             ],
             width="stretch",
             hide_index=True,
         )
-        gate_history: list[dict[str, Any]] = []
-        for item_value in history:
-            item = _mapping(item_value)
-            source_rows = _sequence(item.get("gates")) or _sequence(
-                item.get("failure_details")
-            )
-            for gate_value in source_rows:
-                gate = _mapping(gate_value)
-                gate_history.append(
+
+    with st.expander("All Qwen decisions and read-only advisories", expanded=False):
+        if reviews:
+            st.caption("Execution reviews")
+            st.dataframe(
+                [
                     {
-                        "scanned_at": item.get("scanned_at"),
                         "date": item.get("strategy_date"),
                         "symbol": item.get("symbol"),
-                        "result": item.get("result"),
-                        "gate": gate.get("gate"),
-                        "passed": gate.get("passed"),
-                        "reason": gate.get("reason"),
-                        "detail": gate.get("detail"),
+                        "rank": item.get("rank"),
+                        "status": item.get("status"),
+                        "outcome": _review_display_outcome(item),
+                        "reason": item.get("reason"),
+                        "model": item.get("model"),
+                        "tools": len(_sequence(item.get("tool_trace"))),
+                        "ended_at": item.get("ended_at"),
                     }
-                )
-        if gate_history:
-            st.caption("Complete per-scan gate ledger")
-            st.dataframe(gate_history, width="stretch", hide_index=True)
-
-        detail_limit = 8
-        st.caption(
-            f"Detailed leg cards show the {min(detail_limit, len(history))} most recent "
-            "evaluations; the complete scan and gate ledgers above retain every row."
-        )
-        for index, item_value in enumerate(history[:detail_limit], start=1):
-            item = _mapping(item_value)
-            title = (
-                f"Scan {index} · {item.get('symbol') or 'unknown'} · "
-                f"{item.get('result') or 'UNKNOWN'} · {item.get('scanned_at') or 'time unavailable'}"
+                    for item in reviews
+                ],
+                width="stretch",
+                hide_index=True,
             )
-            with st.expander(title, expanded=False):
-                detail_columns = st.columns(6)
-                detail_columns[0].metric("Spot", _money(item.get("spot")))
-                detail_columns[1].metric("IV ratio", item.get("iv_ratio") or "n/a")
-                detail_columns[2].metric(
-                    "Expected move", _money(item.get("expected_move"))
-                )
-                detail_columns[3].metric("Credit", _money(item.get("proposed_credit")))
-                detail_columns[4].metric("Max loss", _money(item.get("maximum_loss")))
-                detail_columns[5].metric("Contracts", item.get("quantity") or "n/a")
-                if _sequence(item.get("legs")):
-                    st.caption("Immutable four-leg structure")
-                    st.dataframe(
-                        _sequence(item.get("legs")),
-                        width="stretch",
-                        hide_index=True,
-                    )
-                gate_rows = _sequence(item.get("gates")) or _sequence(
-                    item.get("failure_details")
-                )
-                if gate_rows:
-                    st.caption("Gate evidence")
-                    st.dataframe(gate_rows, width="stretch", hide_index=True)
-
-    transitions = _sequence(strategy.get("transitions"))
-    if transitions:
-        with st.expander("Strategy state timeline", expanded=False):
-            st.dataframe(transitions, width="stretch", hide_index=True)
-
-
-def _render_agent(view: Mapping[str, Any]) -> None:
-    agent = _mapping(view.get("agent"))
-    mcp = _mapping(view.get("mcp"))
-    _section_heading(
-        "02 · AI orchestration",
-        "Qwen decisions and bounded tool evidence",
-        "Qwen may investigate a candidate and veto it or propose the exact frozen order. It cannot choose strikes, size, credit, or maximum loss.",
-    )
-    columns = st.columns(4)
-    columns[0].metric("Model", agent.get("model") or "not run")
-    columns[1].metric("Status", agent.get("status") or "not run")
-    columns[2].metric("Decision", agent.get("decision") or "none")
-    columns[3].metric("Error", agent.get("error_type") or "none")
-    reviews = _sequence(agent.get("reviews"))
-    advisories = _sequence(agent.get("advisories"))
-    if reviews:
-        st.markdown("#### Candidate decisions")
-        st.dataframe(
-            [
-                {
-                    "date": item.get("strategy_date"),
-                    "symbol": item.get("symbol"),
-                    "status": item.get("status"),
-                    "decision": item.get("decision"),
-                    "reason": item.get("reason"),
-                    "model": item.get("model"),
-                    "tools": len(_sequence(item.get("tool_trace"))),
-                    "ended_at": item.get("ended_at"),
-                }
-                for item in map(_mapping, reviews)
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-    else:
-        st.info("No eligible candidate has reached the Qwen decision loop yet.")
-
-    for item_value in reviews:
-        item = _mapping(item_value)
-        with st.expander(
-            f"Qwen trace · {item.get('symbol') or 'unknown'} · {item.get('decision') or item.get('status') or 'unknown'}",
-            expanded=False,
-        ):
-            trace = _sequence(item.get("tool_trace"))
-            if trace:
-                st.dataframe(trace, width="stretch", hide_index=True)
-            else:
-                st.caption("No tool call was persisted for this review.")
-
-    if advisories:
-        st.markdown("#### Read-only rejected-candidate advisories")
-        st.caption(
-            "These reviews explain a deterministic rejection. They cannot override a failed gate and expose no broker mutation tool."
-        )
-        st.dataframe(
-            [
-                {
-                    "date": item.get("strategy_date"),
-                    "symbol": item.get("symbol"),
-                    "mode": item.get("mode"),
-                    "status": item.get("status"),
-                    "decision": item.get("decision"),
-                    "summary": item.get("summary"),
-                    "non_authorizing": item.get("non_authorizing"),
-                    "model": item.get("model"),
-                    "read_tools": len(_sequence(item.get("tool_trace"))),
-                    "ended_at": item.get("ended_at"),
-                }
-                for item in map(_mapping, advisories)
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-        for item_value in advisories:
-            item = _mapping(item_value)
-            with st.expander(
-                f"Advisory trace · {item.get('symbol') or 'unknown'} · {item.get('status') or 'unknown'}",
-                expanded=False,
-            ):
-                if item.get("summary"):
-                    st.caption(str(item.get("summary")))
-                if _sequence(item.get("evidence")):
-                    st.dataframe(
-                        [
-                            {"evidence": evidence}
-                            for evidence in _sequence(item.get("evidence"))
-                        ],
-                        width="stretch",
-                        hide_index=True,
-                    )
-                st.caption(
-                    "Non-authorizing: "
-                    + ("YES" if item.get("non_authorizing") is True else "UNKNOWN")
-                )
-                if _sequence(item.get("tool_trace")):
-                    st.dataframe(
-                        _sequence(item.get("tool_trace")),
-                        width="stretch",
-                        hide_index=True,
-                    )
-
-    timeline = _sequence(agent.get("timeline"))
-    if timeline:
-        st.markdown("#### Bounded agent-tool timeline")
-        st.dataframe(timeline, width="stretch", hide_index=True)
-    mcp_timeline = _sequence(mcp.get("timeline"))
-    with st.expander(
-        f"Official Alpaca MCP call timeline · {len(mcp_timeline)} calls",
-        expanded=False,
-    ):
+        if advisories:
+            st.caption(
+                "Rejected-candidate advisories are read-only and cannot reverse a deterministic gate."
+            )
+            st.dataframe(advisories, width="stretch", hide_index=True)
+    with st.expander("Recent bounded agent and Alpaca MCP history", expanded=False):
+        timeline = _sequence(agent.get("timeline"))
+        if timeline:
+            st.caption("Qwen tool history")
+            st.dataframe(timeline, width="stretch", hide_index=True)
+        mcp_timeline = _sequence(mcp.get("timeline"))
         if mcp_timeline:
+            st.caption(f"Recent official Alpaca MCP calls · {len(mcp_timeline)} rows")
             st.dataframe(mcp_timeline, width="stretch", hide_index=True)
-        else:
-            st.caption("No MCP call has been published yet.")
+        if not timeline and not mcp_timeline:
+            st.caption("No MCP tool history has been published yet.")
 
 
-def _render_orders_and_portfolio(view: Mapping[str, Any]) -> None:
+def _render_verified_results(view: Mapping[str, Any]) -> None:
     orders = _mapping(view.get("orders"))
     portfolio = _mapping(view.get("portfolio"))
+    strategy = _mapping(view.get("strategy"))
+    candidate = _primary_execution_candidate(view)
+    chains = [_mapping(item) for item in _sequence(orders.get("chains"))]
+    fills = [_mapping(item) for item in _sequence(orders.get("fills"))]
+    broker_leg_fills = [
+        _mapping(item) for item in _sequence(orders.get("broker_leg_fills"))
+    ]
+    filled_entry = next(
+        (
+            chain
+            for chain in chains
+            if chain.get("purpose") == "entry"
+            and chain.get("broker_fill_confirmed") is True
+        ),
+        {},
+    )
+    filled_exit = next(
+        (
+            chain
+            for chain in chains
+            if chain.get("purpose") == "exit"
+            and chain.get("broker_fill_confirmed") is True
+        ),
+        {},
+    )
     _section_heading(
-        "04 · Broker evidence",
-        "Orders, fills, positions, and equity",
-        "Broker-reconciled paper evidence is shown separately from model decisions. Account equity is the authoritative competition result.",
+        "03 · VERIFIED RESULTS",
+        "Separate broker facts from model claims",
+        "Order status, nested leg fills, positions, and account equity come from persisted Alpaca observations. Account equity is the authoritative result.",
     )
     columns = st.columns(6)
-    columns[0].metric("Order chains", orders.get("chain_count", 0))
-    columns[1].metric("Leg fills", orders.get("fill_count", 0))
+    columns[0].metric("Trade", candidate.get("symbol") or "none")
+    columns[1].metric(
+        "Entry fill", _mleg_price_label(filled_entry.get("broker_fill_price"))
+    )
     columns[2].metric(
-        "Option cash flow, ex-fees",
-        _money(orders.get("option_cash_flow_ex_fees")),
+        "Exit fill", _mleg_price_label(filled_exit.get("broker_fill_price"))
     )
-    columns[3].metric("Position", portfolio.get("position", "UNKNOWN"))
-    columns[4].metric("Latest equity", _money(portfolio.get("latest_equity")))
+    columns[3].metric(
+        "Gross spread P&L",
+        _money(orders.get("broker_mleg_cash_flow_ex_fees"), signed=True),
+    )
+    columns[4].metric("End state", portfolio.get("position", "UNKNOWN"))
     columns[5].metric(
-        "Observed P&L",
-        _money(portfolio.get("observed_change"), signed=True),
+        "Account P&L", _money(portfolio.get("observed_change"), signed=True)
     )
-    chains = _sequence(orders.get("chains"))
+
+    if orders.get("broker_round_trip_confirmed"):
+        message = (
+            "Broker-confirmed round trip: "
+            f"{_markdown_currency(_mleg_price_label(filled_entry.get('broker_fill_price')))} in, "
+            f"{_markdown_currency(_mleg_price_label(filled_exit.get('broker_fill_price')))} out, and "
+            f"{_markdown_currency(_money(orders.get('broker_mleg_cash_flow_ex_fees'), signed=True))} "
+            "gross spread P&L from the reported MLEG prices. The account ended flat."
+        )
+        difference = _difference(
+            portfolio.get("observed_change"),
+            orders.get("broker_mleg_cash_flow_ex_fees"),
+        )
+        if difference not in (None, 0.0):
+            message += (
+                " Account equity differs by "
+                f"{_markdown_currency(_money(difference, signed=True))}; "
+                "the dashboard leaves that difference unattributed."
+            )
+        st.success(message)
+
     if chains:
-        st.dataframe(chains, width="stretch", hide_index=True)
+        st.markdown("#### Entry / exit execution evidence")
+        st.dataframe(
+            [
+                {
+                    "symbol": chain.get("symbol"),
+                    "purpose": chain.get("purpose"),
+                    "state": chain.get("state"),
+                    "initial limit": _mleg_price_label(
+                        chain.get("initial_limit_price")
+                    ),
+                    "final limit": _mleg_price_label(chain.get("final_limit_price")),
+                    "submitted (ET)": _et_timestamp(chain.get("submitted_at")),
+                    "filled (ET)": _et_timestamp(chain.get("broker_filled_at")),
+                    "broker MLEG fill": _mleg_price_label(
+                        chain.get("broker_fill_price")
+                    ),
+                    "broker_fill_confirmed": chain.get("broker_fill_confirmed"),
+                    "attempts": chain.get("attempt_count"),
+                }
+                for chain in chains
+            ],
+            width="stretch",
+            hide_index=True,
+        )
     else:
-        st.info("No paper order chain has been published yet.")
-    st.caption(
-        f"First observed equity {_money(portfolio.get('first_equity'))} · "
-        f"latest observation {portfolio.get('observed_at') or 'not observed'}"
-    )
+        st.info("No paper order lifecycle has been published yet.")
+
+    legs = _sequence(candidate.get("legs"))
+    if candidate and legs:
+        st.markdown(
+            f"#### Selected four-leg structure · {candidate.get('symbol') or 'candidate'}"
+        )
+        st.caption(
+            "Deterministic quote snapshot "
+            f"{_et_timestamp(candidate.get('scanned_at'))} · "
+            "proposed credit "
+            f"{_markdown_currency(_money(candidate.get('proposed_credit')))} · "
+            "maximum loss "
+            f"{_markdown_currency(_money(candidate.get('maximum_loss')))}. "
+            "These are selection-time quotes, not reconstructed fills."
+        )
+        st.dataframe(legs, width="stretch", hide_index=True)
+
+    if broker_leg_fills:
+        st.markdown(
+            f"#### Broker-reported leg fills · {len(broker_leg_fills)} observations"
+        )
+        st.dataframe(
+            [
+                {
+                    **{key: item.get(key) for key in ("purpose", "symbol", "side")},
+                    "intent": item.get("position_intent"),
+                    "quantity": item.get("quantity"),
+                    "price": _money(item.get("price")),
+                    "filled (ET)": _et_timestamp(item.get("filled_at")),
+                }
+                for item in broker_leg_fills
+            ],
+            width="stretch",
+            hide_index=True,
+        )
+        if not fills:
+            st.caption(
+                "These values come directly from Alpaca's nested MLEG order observations. "
+                "The legacy normalized fill table has no rows, so it is not used for P&L."
+            )
+    elif fills:
+        st.markdown("#### Normalized broker leg fill prices")
+        st.dataframe(fills, width="stretch", hide_index=True)
+
+    positions = _sequence(portfolio.get("positions"))
+    if positions:
+        st.markdown("#### Current broker-observed option positions")
+        st.dataframe(positions, width="stretch", hide_index=True)
+
+    observed_rows = [
+        item
+        for item in map(_mapping, _sequence(view.get("competition_days")))
+        if item.get("scans") or item.get("order_chains")
+    ]
+    if observed_rows:
+        st.markdown("#### Competition-day record")
+        st.dataframe(observed_rows, width="stretch", hide_index=True)
 
     equity_history = [
         item
         for item in map(_mapping, _sequence(portfolio.get("equity_history")))
         if item.get("equity") is not None
     ]
-    if equity_history:
-        st.markdown("#### Equity observations")
-        distinct_equity = {item.get("equity") for item in equity_history}
-        if len(equity_history) > 1 and len(distinct_equity) > 1:
-            st.line_chart(equity_history, x="observed_at", y="equity", height=230)
-        else:
-            st.info(
-                f"Equity remained unchanged across {len(equity_history):,} "
-                "broker observations."
-            )
-        with st.expander("Equity observation table", expanded=False):
-            st.dataframe(equity_history, width="stretch", hide_index=True)
-
-    fills = _sequence(orders.get("fills"))
-    if fills:
-        st.markdown("#### Fill ledger")
-        st.dataframe(fills, width="stretch", hide_index=True)
-    timeline = _sequence(orders.get("timeline"))
-    if timeline:
-        with st.expander("Order-status timeline", expanded=False):
-            st.dataframe(timeline, width="stretch", hide_index=True)
-
-
-def _render_activity_history(view: Mapping[str, Any]) -> None:
-    activity = _sequence(view.get("activity_timeline"))
-    _section_heading(
-        "03 · Complete audit trail",
-        "What the worker, Qwen, MCP, and broker did",
-        "This unified ledger is assembled from persisted report evidence. It is newest-first; the candidate ledger above retains every individual symbol evaluation.",
-    )
-    if not activity:
-        st.info("No timestamped activity has been published yet.")
-        return
-    category_counts = Counter(
-        str(_mapping(item).get("category") or "UNKNOWN") for item in activity
-    )
     st.caption(
-        " · ".join(
-            f"{category}: {count:,}"
-            for category, count in sorted(category_counts.items())
-        )
+        "First observed equity "
+        f"{_markdown_currency(_money(portfolio.get('first_equity')))} · latest "
+        f"{_markdown_currency(_money(portfolio.get('latest_equity')))} at "
+        f"{portfolio.get('observed_at') or 'not observed'} · strategy state "
+        f"{strategy.get('state') or 'unknown'}."
     )
-    st.dataframe(activity, width="stretch", hide_index=True, height=430)
+
+    _render_collapsed_evidence(view, equity_history=equity_history)
 
 
-def _render_safety(
-    view: Mapping[str, Any], *, configured_profile: str = "earnings"
+def _render_collapsed_evidence(
+    view: Mapping[str, Any], *, equity_history: Sequence[Mapping[str, Any]]
 ) -> None:
+    candidate = _mapping(view.get("candidate"))
+    strategy = _mapping(view.get("strategy"))
+    orders = _mapping(view.get("orders"))
+    portfolio = _mapping(view.get("portfolio"))
+    history = [_mapping(item) for item in _sequence(candidate.get("history"))]
+    with st.expander(
+        "Complete scans, deterministic gates, and candidate legs", expanded=False
+    ):
+        matrix = _sequence(candidate.get("scan_matrix"))
+        if matrix:
+            st.caption("All-symbol scan matrix")
+            st.dataframe(matrix, width="stretch", hide_index=True)
+        if history:
+            st.caption("Every persisted candidate evaluation")
+            st.dataframe(history, width="stretch", hide_index=True)
+        if not matrix and not history:
+            st.caption("No candidate evidence has been published yet.")
+
+    with st.expander(
+        "Full activity, state, order, and equity histories", expanded=False
+    ):
+        activity = _sequence(view.get("activity_timeline"))
+        if activity:
+            counts = Counter(
+                str(_mapping(item).get("category") or "UNKNOWN") for item in activity
+            )
+            st.caption(
+                "Activity · "
+                + " · ".join(
+                    f"{category}: {count:,}"
+                    for category, count in sorted(counts.items())
+                )
+            )
+            st.dataframe(activity, width="stretch", hide_index=True, height=430)
+        if _sequence(strategy.get("transitions")):
+            st.caption("Strategy state history")
+            st.dataframe(
+                _sequence(strategy.get("transitions")), width="stretch", hide_index=True
+            )
+        if _sequence(orders.get("timeline")):
+            st.caption("Order-status history")
+            st.dataframe(
+                _sequence(orders.get("timeline")), width="stretch", hide_index=True
+            )
+        if equity_history:
+            st.caption("Equity observation history")
+            st.dataframe(equity_history, width="stretch", hide_index=True)
+        if _sequence(portfolio.get("position_history")):
+            st.caption("Position observation history")
+            st.dataframe(
+                _sequence(portfolio.get("position_history")),
+                width="stretch",
+                hide_index=True,
+            )
+
+
+def _render_safety_and_robustness(view: Mapping[str, Any]) -> None:
     safety = _mapping(view.get("safety"))
     kill = _mapping(safety.get("kill_switch"))
     permission = _mapping(safety.get("entry_permission"))
     _section_heading(
-        "05 · Safety boundary",
-        "Deterministic controls remain in charge",
-        "The public container has a read-only database mount, no broker/model credentials, and no mutation callbacks.",
+        "04 · SAFETY & ROBUSTNESS",
+        "The model cannot bypass deterministic controls",
+        "One-shot authorization, defined loss, immutable order intent, restart-safe reconciliation, and a private kill switch contain the paper-trading workflow.",
     )
     columns = st.columns(5)
     columns[0].metric(
@@ -1578,50 +1642,185 @@ def _render_safety(
         "ON" if kill.get("enabled") else "OFF" if kill.get("known") else "UNKNOWN",
     )
     columns[1].metric("Entry permit", permission.get("state", "MISSING"))
-    maximum_defined_loss = (
-        "80.00"
-        if configured_profile.strip().lower() == "intraday_canary"
-        else safety.get("maximum_defined_loss")
-    )
-    columns[2].metric("Max defined loss", _money(maximum_defined_loss))
+    columns[2].metric("Max defined loss", _money(safety.get("maximum_defined_loss")))
     columns[3].metric("Max contracts", safety.get("maximum_contracts", 1))
     columns[4].metric("Equity kill floor", _money(safety.get("equity_kill_threshold")))
     st.info(
-        "Public evidence only: no order button, no kill-switch control, no Alpaca key, and no Featherless key exists in this viewer."
+        "Public evidence only: this container has a read-only database mount, no "
+        "broker or model credentials, no order controls, and no mutation callbacks."
     )
-    permission_history = _sequence(safety.get("entry_permission_history"))
-    if permission_history:
-        with st.expander("Date-bound entry permission history", expanded=False):
-            st.dataframe(permission_history, width="stretch", hide_index=True)
-    kill_history = _sequence(kill.get("history"))
-    if kill_history:
-        with st.expander("Kill-switch audit history", expanded=False):
-            st.dataframe(kill_history, width="stretch", hide_index=True)
+    with st.expander("Authorization and kill-switch histories", expanded=False):
+        permissions = _sequence(safety.get("entry_permission_history"))
+        if permissions:
+            st.caption("Date-bound entry permissions")
+            st.dataframe(permissions, width="stretch", hide_index=True)
+        history = _sequence(kill.get("history"))
+        if history:
+            st.caption("Kill-switch audit")
+            st.dataframe(history, width="stretch", hide_index=True)
+        if not permissions and not history:
+            st.caption("No safety-control history has been published yet.")
 
 
-def _render_limitations(view: Mapping[str, Any]) -> None:
-    data_profile = _mapping(view.get("data_profile"))
+def _render_limitations_and_evidence(view: Mapping[str, Any]) -> None:
     _section_heading(
-        "06 · Evidence boundary",
-        "What this dashboard does—and does not—prove",
-        "This is transparent competition evidence, not a claim of live-market profitability.",
+        "05 · LIMITATIONS & EVIDENCE",
+        "An execution demonstration, not proof of alpha",
+        "The full sanitized public evidence remains downloadable for independent review.",
     )
     st.warning("PAPER TRADING · BASIC INDICATIVE OPTIONS DATA · SIMULATED FILLS")
     limitations = [
-        *(_sequence(data_profile.get("limitations"))),
-        *(_sequence(view.get("limitations"))),
+        "Alpaca Basic uses IEX stock data and indicative, non-OPRA option quotes.",
+        "Paper fills are simulated and do not establish live execution quality or profitability.",
+        "Total account equity is authoritative; gross MLEG price arithmetic can differ from account P&L.",
+        "The Sep 3 canary is a competition-only adaptation, not a backtested or generic fallback strategy.",
+        "This one paper result does not prove repeatable alpha and is not investment advice.",
     ]
-    for limitation in dict.fromkeys(str(item) for item in limitations):
+    for limitation in limitations:
         st.markdown(f"- {limitation}")
-    st.markdown(
-        "- Earnings and macro events can move the underlying beyond the modeled range.\n"
-        "- The Sep 3 canary is a competition-only adaptation chosen after observing Sep 1–2 data constraints; it is not a backtested or generic fallback strategy.\n"
-        "- A same-day paper fill or nonzero P&L would demonstrate execution, not repeatable alpha.\n"
-        "- Historical or paper performance does not guarantee future results.\n"
-        "- This system is a bounded engineering demonstration, not investment advice."
-    )
-    with st.expander("Audit digest", expanded=False):
+    with st.expander("Audit digest and evidence notes", expanded=False):
         st.code(str(view.get("report_digest") or "unavailable"), language=None)
+        st.caption(
+            "The MCP timeline is intentionally labeled recent history because the "
+            "operational report caps retained display rows."
+        )
+    st.download_button(
+        "Download sanitized public evidence (JSON)",
+        data=serialize_public_evidence(view),
+        file_name="thetatrap-public-evidence.json",
+        mime="application/json",
+    )
+
+
+def serialize_public_evidence(view: Mapping[str, Any]) -> str:
+    """Serialize only the already-public projection, with defense-in-depth redaction."""
+
+    sanitized = redact_public_identifiers(dict(view))
+    return json.dumps(sanitized, indent=2, sort_keys=True, ensure_ascii=True)
+
+
+def _primary_execution_review(view: Mapping[str, Any]) -> Mapping[str, Any]:
+    reviews = [
+        _mapping(item) for item in _sequence(_mapping(view.get("agent")).get("reviews"))
+    ]
+    return _select_primary_execution_review(reviews)
+
+
+def _select_primary_execution_review(
+    reviews: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    if not reviews:
+        return {}
+
+    def priority(item: Mapping[str, Any]) -> tuple[int, int, str]:
+        completed_allow = (
+            str(item.get("status") or "").upper() == "COMPLETED"
+            and str(item.get("decision") or "").upper() == "ALLOW"
+        )
+        sep3_qqq = (
+            completed_allow
+            and item.get("strategy_date") == CANARY_STRATEGY_DATE
+            and str(item.get("symbol") or "").upper() == "QQQ"
+        )
+        return (int(sep3_qqq), int(completed_allow), str(item.get("ended_at") or ""))
+
+    return max(reviews, key=priority)
+
+
+def _primary_execution_candidate(view: Mapping[str, Any]) -> Mapping[str, Any]:
+    primary = _primary_execution_review(view)
+    history = [
+        _mapping(item)
+        for item in _sequence(_mapping(view.get("candidate")).get("history"))
+    ]
+    matches = [
+        item
+        for item in history
+        if item.get("strategy_date") == primary.get("strategy_date")
+        and item.get("symbol") == primary.get("symbol")
+        and item.get("eligible") is True
+    ]
+    if matches:
+        return max(matches, key=lambda item: str(item.get("scanned_at") or ""))
+    eligible = [item for item in history if item.get("eligible") is True]
+    if eligible:
+        return max(eligible, key=lambda item: str(item.get("scanned_at") or ""))
+    return {}
+
+
+def _is_policy_gateway_block(review: Mapping[str, Any]) -> bool:
+    return str(review.get("reason") or "").lower() == "policyerror"
+
+
+def _review_display_outcome(review: Mapping[str, Any]) -> str:
+    if not review:
+        return "not run"
+    if _is_policy_gateway_block(review):
+        return "SAFETY GATEWAY BLOCKED"
+    return str(review.get("decision") or review.get("status") or "unknown").upper()
+
+
+def _model_label(value: Any) -> str:
+    primary = str(value or "unknown").split("|", 1)[0]
+    return primary.removeprefix("Qwen/")
+
+
+def _option_underlying(value: Any) -> str | None:
+    match = OPTION_SYMBOL_PATTERN.fullmatch(str(value or "").upper())
+    return match.group(1) if match else None
+
+
+def _broker_mleg_cash_flow(chains: Sequence[Mapping[str, Any]]) -> str | None:
+    """Calculate cash flow only from complete broker-reported MLEG fills."""
+
+    filled = [
+        _mapping(chain)
+        for chain in chains
+        if _mapping(chain).get("broker_fill_confirmed") is True
+    ]
+    if not filled:
+        return None
+    cash_flow = 0.0
+    for chain in filled:
+        price = _number(chain.get("broker_fill_price"))
+        quantity = _number(chain.get("broker_filled_quantity"))
+        if price is None or quantity is None:
+            return None
+        cash_flow -= price * quantity * 100
+    return f"{cash_flow:.2f}"
+
+
+def _mleg_price_label(value: Any) -> str:
+    price = _number(value)
+    if price is None:
+        return "not filled"
+    direction = "credit" if price < 0 else "debit"
+    return f"${abs(price):,.2f} {direction}"
+
+
+def _markdown_currency(value: str) -> str:
+    return value.replace("$", r"\$")
+
+
+def _difference(left: Any, right: Any) -> float | None:
+    left_number = _number(left)
+    right_number = _number(right)
+    if left_number is None or right_number is None:
+        return None
+    return round(left_number - right_number, 2)
+
+
+def _et_timestamp(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return "not submitted"
+    try:
+        timestamp = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    eastern = timestamp.astimezone(ZoneInfo("America/New_York"))
+    return f"{eastern:%b} {eastern.day}, {eastern:%H:%M:%S} ET"
 
 
 def _section_heading(kicker: str, title: str, description: str) -> None:
@@ -1692,6 +1891,8 @@ def _money(value: Any, *, signed: bool = False) -> str:
         number = float(str(value))
     except ValueError:
         return "n/a"
+    if number < 0:
+        return f"-${abs(number):,.2f}"
     prefix = "+" if signed and number > 0 else ""
     return f"{prefix}${number:,.2f}"
 
